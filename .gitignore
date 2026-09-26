@@ -1,0 +1,4 @@
+*.o
+*.a
+*.vim
+.testing

@@ -1,0 +1,36 @@
+Open Web Libraries
+==================
+
+Open Web Libraries (owl) is a project to bring set of simple,
+fast and secure web libraries for C.
+
+It provides a set of portable and easy-to-use APIs for building web
+applications, including HTTP server (routing, middleware, and more soon).
+
+----
+Why?
+----
+
+C is the most great programming language of all times.
+It is fast, efficient, and widely used in various domains.
+Ability to write web applications in C can be beneficial for
+performance-critical applications, embedded systems, and
+low-level programming. Also, it can make server bills cheaper
+by using less resources.
+
+-----------
+Main goals:
+-----------
+
+- performance
+- simplicity
+- security
+- reliability
+- readability
+- small codebase
+
+-------
+License
+-------
+
+BSD 3-clause
