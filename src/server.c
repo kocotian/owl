@@ -30,22 +30,32 @@ server_create(Server *this, const char *host, int port)
 	/* initialize sockaddr_in struct for binding */
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
-	inet_pton(AF_INET, host, &addr.sin_addr);
+	if (1 != inet_pton(AF_INET, host, &addr.sin_addr)) {
+		printf("Failed to convert host address: %s\n", strerror(errno));
+		safe_close(&(this->fd));
+		return -1;
+	}
 
 	/* bind socket to address */
-	setsockopt(this->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
+	if (0 > setsockopt(this->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt))) {
+		printf("Failed to set socket options: %s\n", strerror(errno));
+		safe_close(&(this->fd));
+		return -1;
+	}
+
 	if (bind(this->fd, (struct sockaddr *)&addr, sizeof (addr)) < 0) {
 		printf("Failed to bind socket: %s\n", strerror(errno));
 		safe_close(&(this->fd));
-		return -3;
+		return -1;
 	}
 
 	/* Set the listening server socket to non-blocking mode */
 	int flags = fcntl(this->fd, F_GETFL, 0);
-	if (flags < 0)
+	if (0 > flags || fcntl(this->fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		printf("Failed to change socket mode: %s\n", strerror(errno));
+		safe_close(&(this->fd));
 		return -1;
-	if (fcntl(this->fd, F_SETFL, flags | O_NONBLOCK) < 0)
-		return -1;
+	}
 
 	this->up = true;
 
