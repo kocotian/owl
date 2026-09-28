@@ -16,9 +16,7 @@
 
 #include <stdlib.h>
 
-/* TODO: rm */
-#include <stdio.h>
-
+[[nodiscard]]
 int
 connection_create(Connection *this, Server *server)
 {
@@ -36,11 +34,18 @@ connection_create(Connection *this, Server *server)
 	/* Great. We can send event that connection is established. */
 	if (this->server->ev_connection_established)
 		if (this->server->ev_connection_established(this) < 0)
-			return -1;
+			goto cleanup;
 
-	/* Then, you probably want to listener_add_connection() it. */
+	/* We had listener_add_connection().
+	   We replaced it with listener_connection_create().
+	   Maybe we should go back to listener_add_connection()?
+	   TODO. */
 
 	return 0;
+
+cleanup:
+	safe_close(&(this->fd));
+	return -1;
 }
 
 int
@@ -50,7 +55,8 @@ connection_shutdown(Connection *this)
 	if (nullptr == this)
 		return -1;
 
-	shutdown(this->fd, SHUT_WR);
+	if (0 > shutdown(this->fd, SHUT_WR))
+		return -1;
 
 	return (int)(this->shutdown = true);
 }
@@ -62,7 +68,7 @@ connection_destroy(Connection *this)
 	if (nullptr == this)
 		return -1;
 
-	if (this->fd <= 0) {
+	if (this->fd < 0) {
 		/* Already closed */
 		return -1;
 	}

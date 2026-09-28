@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+[[nodiscard]]
 int
 server_create(Server *this, const char *host, int port)
 {
@@ -22,9 +23,9 @@ server_create(Server *this, const char *host, int port)
 
 	/* set fd by creating and binding a socket */
 	this->fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (0 > this->fd) {
+	if (0 >= this->fd) {
 		printf("Failed to create socket: %s\n", strerror(errno));
-		return -2;
+		return -1;
 	}
 
 	/* initialize sockaddr_in struct for binding */
@@ -32,34 +33,34 @@ server_create(Server *this, const char *host, int port)
 	addr.sin_port = htons(port);
 	if (1 != inet_pton(AF_INET, host, &addr.sin_addr)) {
 		printf("Failed to convert host address: %s\n", strerror(errno));
-		safe_close(&(this->fd));
-		return -1;
+		goto cleanup;
 	}
 
 	/* bind socket to address */
 	if (0 > setsockopt(this->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt))) {
 		printf("Failed to set socket options: %s\n", strerror(errno));
-		safe_close(&(this->fd));
-		return -1;
+		goto cleanup;
 	}
 
 	if (bind(this->fd, (struct sockaddr *)&addr, sizeof (addr)) < 0) {
 		printf("Failed to bind socket: %s\n", strerror(errno));
-		safe_close(&(this->fd));
-		return -1;
+		goto cleanup;
 	}
 
 	/* Set the listening server socket to non-blocking mode */
 	int flags = fcntl(this->fd, F_GETFL, 0);
 	if (0 > flags || fcntl(this->fd, F_SETFL, flags | O_NONBLOCK) < 0) {
 		printf("Failed to change socket mode: %s\n", strerror(errno));
-		safe_close(&(this->fd));
-		return -1;
+		goto cleanup;
 	}
 
 	this->up = true;
 
 	return 0;
+
+cleanup:
+	safe_close(&(this->fd));
+	return -1;
 }
 
 int
@@ -69,7 +70,8 @@ server_destroy(Server *this)
 	if (nullptr == this)
 		return -1;
 
-	safe_close(&(this->fd));
+	if (0 > safe_close(&(this->fd)))
+		return -1;
 
 	this->up = false;
 
@@ -94,7 +96,7 @@ server_destroy(Server *this)
 		return 0;                                            \
 	}
 
-SERVER_ON(listening, int (*handler)())
+SERVER_ON(listening, int (*handler)(void))
 SERVER_ON(connection_established, int (*handler)(Connection *connection))
 SERVER_ON(connection_ready, int (*handler)(Connection *connection))
 SERVER_ON(connection_closed, int (*handler)(Connection *connection))

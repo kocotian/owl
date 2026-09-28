@@ -29,6 +29,14 @@ Main goals:
 - readability
 - small codebase
 
+====
+TODO
+====
+- Arena allocator
+- Implement Client
+- Maybe Listener should have a list of listenables (Server/Client)?
+- Generally think about rewriting Listener
+
 -------
 License
 -------

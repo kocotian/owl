@@ -10,7 +10,6 @@ struct owl_Connection {
 	int	fd;
 	bool	shutdown;
 	bool	fin;
-	void	*memory;
 	void	*state;
 };
 
