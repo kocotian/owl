@@ -39,65 +39,32 @@ listener_destroy(Listener *this)
 
 [[nodiscard]]
 int
-listener_connection_create(Listener *this)
-{
-	/* validate input parameters */
-	if (nullptr == this)
-		return -1;
-
-	/* Connection cannot live on stack, because we are
-	   giving a pointer to it to a listener (epoll) instance.
-	   Maybe we should think about passing Connection
-	   through a parameter? And listener would then have
-	   a list of connections? TODO */
-
-	/* First we should zero-allocate connection. */
-	Connection *connection = calloc(1, sizeof *connection);
-	/* We did calloc, so connection should be 0'ed */
-
-	if (nullptr == connection)
-		/* We failed to create new connection. */
-		return -1;
-
-	if (connection_create(connection, this->server) != 0)
-		/* When creation failed, we should free allocation */
-		goto cleanup;
-
-	if (epoll_ctl(this->fd, EPOLL_CTL_ADD, connection->fd, &(struct epoll_event){
-			.events = EPOLLIN | EPOLLET,
-			.data.ptr = connection
-		}) < 0)
-		goto cleanup;
-
-	return 0;
-
-cleanup:
-	free(connection);
-	return -1;
-}
-
-int
-listener_connection_destroy(Listener *this, Connection *connection)
+listener_register_connection(Listener *this, Connection *connection)
 {
 	/* validate input parameters */
 	if (nullptr == this || nullptr == connection)
 		return -1;
 
-	/* TODO: check that code! */
-	if (connection->fin == false) {
-#if 0
-		if (connection->shutdown == false) {
-			connection_shutdown(connection);
-			return 0;
-		}
-#endif
-		return 0;
-	}
-	
-	if (epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr) < 0)
+	if (epoll_ctl(this->fd, EPOLL_CTL_ADD, connection->fd, &(struct epoll_event){
+			.events = EPOLLIN | EPOLLET,
+			.data.ptr = connection
+		}) < 0)
 		return -1;
 
-	if (connection_destroy(connection) < 0)
+	/* TODO: Maybe some connection list? */
+
+	return 0;
+}
+
+[[nodiscard]]
+int
+listener_unregister_connection(Listener *this, Connection *connection)
+{
+	/* validate input parameters */
+	if (nullptr == this || nullptr == connection)
+		return -1;
+
+	if (epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr) < 0)
 		return -1;
 
 	return 0;
@@ -160,13 +127,33 @@ listener_start(Listener *this)
 		for (int i = 0; i < n; ++i) {
 			if (events[i].data.ptr == this->server) {
 				/* Server got a new connection */
-				if (listener_connection_create(this) < 0)
-					break;
+				Connection *connection = calloc(1, sizeof *connection);
+				/* Dynamic memory - should be free()'d.
+				   TODO: We should think about some connection pool
+				   inside Listener or somewhere. */
+
+				if (nullptr == connection) {
+					printf("Failed to allocate memory for new connection: %s\n", strerror(errno));
+					continue;
+				}
+
+				if (0 > connection_create(connection, this->server)) {
+					free(connection);
+					continue;
+				}
+
+				if (0 > listener_register_connection(this, connection)) {
+					connection_destroy(connection);
+					free(connection);
+					continue;
+				}
 			} else {
 				Connection *connection = events[i].data.ptr;
 
 				if (events[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
 					if (events[i].events & EPOLLERR) {
+						if (0 > listener_unregister_connection(this, connection))
+							continue;
 						connection_destroy(connection);
 						continue;
 					}
@@ -181,18 +168,20 @@ listener_start(Listener *this)
 					if ((rd = read(connection->fd, useless, 512)) != 0) {
 						if (rd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
 							perror("read");
-							connection->fin = true;
+							if (0 > listener_unregister_connection(this, connection))
+								continue;
 							connection_destroy(connection);
 						}
 						continue;
 					}
 
-					connection->fin = true;
-
 					/* Send event that we closed a connection. */
 					if (connection->server->ev_connection_closed)
 						if (connection->server->ev_connection_closed(connection) < 0)
 							return -1;
+
+					if (0 > listener_unregister_connection(this, connection))
+						continue;
 
 					connection_destroy(connection);
 					continue;
@@ -204,7 +193,10 @@ listener_start(Listener *this)
 
 				if ((this->server->ev_connection_ready)
 				&&  (this->server->ev_connection_ready(connection) < 0)) {
-					listener_connection_destroy(this, connection);
+					if (0 > listener_unregister_connection(this, connection))
+						continue;
+
+					connection_destroy(connection);
 					continue;
 				}
 
@@ -213,9 +205,9 @@ listener_start(Listener *this)
 				          to know when to close when using HTTPServer.
 					  Maybe with connection->should_close? */
 
-#if 0
+#if 1
 				connection_shutdown(connection);
-				listener_connection_destroy(this, connection);
+				// listener_connection_destroy(this, connection);
 #endif
 			}
 		}

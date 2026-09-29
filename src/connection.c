@@ -27,6 +27,7 @@ connection_create(Connection *this, Server *server)
 	/* Set to default values. */
 	this->server = server;
 	/* Accepting incoming connection. */
+	/* TODO: We should get sockaddr. */
 	this->fd = accept4(server->fd, nullptr, nullptr, SOCK_NONBLOCK);
 	if (this->fd < 0)
 		return -1;

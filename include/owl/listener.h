@@ -21,9 +21,8 @@ struct owl_Listener {
 
 int owl_listener_create(struct owl_Listener *this, struct owl_Server *server);
 int owl_listener_destroy(struct owl_Listener *this);
-int owl_listener_connection_put(struct owl_Listener *this, struct owl_Connection *connection);
-int owl_listener_connection_get(struct owl_Listener *this, int fd, struct owl_Connection *connection);
-int owl_listener_connection_del(struct owl_Listener *this, struct owl_Connection *connection);
+int owl_listener_register_connection(struct owl_Listener *this, struct owl_Connection *connection);
+int owl_listener_unregister_connection(struct owl_Listener *this, struct owl_Connection *connection);
 int owl_listener_start(struct owl_Listener *this);
 
 /* Namespace import */
@@ -34,9 +33,8 @@ int owl_listener_start(struct owl_Listener *this);
 /*	Functions */
 #	define listener_create owl_listener_create
 #	define listener_destroy owl_listener_destroy
-#	define listener_connection_put owl_listener_connection_put
-#	define listener_connection_get owl_listener_connection_get
-#	define listener_connection_del owl_listener_connection_del
+#	define listener_register_connection owl_listener_register_connection
+#	define listener_unregister_connection owl_listener_unregister_connection
 #	define listener_start owl_listener_start
 # endif
 
