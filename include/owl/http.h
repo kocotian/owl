@@ -115,6 +115,7 @@ int owl_httpheader_res_set(struct owl_HTTPTransaction *t, const char *key, const
 int owl_httpheader_res_setf(struct owl_HTTPTransaction *t, const char *key, const char *val_fmt, ...);
 int owl_httprequest_read(int fd, struct owl_HTTPConnectionState *st);
 int owl_httpresponse_write(int fd, struct owl_HTTPTransaction *t);
+int owl_httpserver_create_unix(struct owl_HTTPServer *this, const char *path);
 int owl_httpserver_create(struct owl_HTTPServer *this, const char *host, int port);
 int owl_httptransaction_create(struct owl_HTTPTransaction *this, struct owl_HTTPServer *server);
 int owl_httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server);
@@ -145,6 +146,7 @@ int owl_httpserver_on_transaction(struct owl_HTTPServer *, int (*handler)(struct
 #	define httpheader_res_setf owl_httpheader_res_setf
 #	define httprequest_read owl_httprequest_read
 #	define httpresponse_write owl_httpresponse_write
+#	define httpserver_create_unix owl_httpserver_create_unix
 #	define httpserver_create owl_httpserver_create
 #	define httptransaction_create owl_httptransaction_create
 #	define httpconnectionstate_create owl_httpconnectionstate_create

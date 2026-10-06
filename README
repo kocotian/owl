@@ -1,6 +1,18 @@
 Open Web Libraries
 ==================
 
+
+[][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][]
+[]''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''[]
+[]' WARNING: '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''[]
+[]'          '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''[]
+[]' This library is not in production state yet. There are eg. many known   []
+[]' memory leaks that will not be fixed because memory allocation           []
+[]' mechanism will be replaced soon.                                        []
+[]'                                                                         []
+[][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][]
+
+
 Open Web Libraries (owl) is a project to bring set of simple,
 fast and secure web libraries for C.
 

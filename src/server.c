@@ -4,11 +4,65 @@
 #include <owl/utils.h>
 
 #include <arpa/inet.h>
+#include <sys/un.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+[[nodiscard]]
+int
+server_create_unix(Server *this, const char *path)
+{
+	struct sockaddr_un addr = {};
+	int opt = 1;
+
+	/* validate input parameters */
+	if (nullptr == this || nullptr == path)
+		return -1;
+
+	/* set fd by creating and binding a socket */
+	this->fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (0 >= this->fd) {
+		printf("Failed to create socket: %s\n", strerror(errno));
+		return -1;
+	}
+
+	/* initialize sockaddr_in struct for binding */
+	addr.sun_family = AF_UNIX;
+	int a, b;
+	if ((a = strlen(path)) != (b = strlcpy(addr.sun_path, path, sizeof (addr.sun_path)))) {
+		printf("Path to a socket is too long (%d, %d; %d).\n", a, b, sizeof (addr.sun_path));
+		goto cleanup;
+	}
+
+	/* bind socket to address */
+	if (0 > setsockopt(this->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt))) {
+		printf("Failed to set socket options: %s\n", strerror(errno));
+		goto cleanup;
+	}
+
+	if (bind(this->fd, (struct sockaddr *)&addr, sizeof (addr)) < 0) {
+		printf("Failed to bind socket: %s\n", strerror(errno));
+		goto cleanup;
+	}
+
+	/* Set the listening server socket to non-blocking mode */
+	int flags = fcntl(this->fd, F_GETFL, 0);
+	if (0 > flags || fcntl(this->fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		printf("Failed to change socket mode: %s\n", strerror(errno));
+		goto cleanup;
+	}
+
+	this->up = true;
+
+	return 0;
+
+cleanup:
+	safe_close(&(this->fd));
+	return -1;
+}
 
 [[nodiscard]]
 int

@@ -744,6 +744,23 @@ httpserver_default_connection_handler(Connection *connection)
 }
 
 int
+httpserver_create_unix(HTTPServer *this, const char *path)
+{
+	/* validate input parameters */
+	if (!this || !path)
+		return -1;
+
+	if (server_create_unix((Server *)this, path) < 0)
+		return -2;
+
+	/* default HTTP handlers */
+	if (server_on_connection_ready((Server *)this, httpserver_default_connection_handler) < 0)
+		return -3;
+
+	return 0;
+}
+
+int
 httpserver_create(HTTPServer *this, const char *host, int port)
 {
 	/* validate input parameters */

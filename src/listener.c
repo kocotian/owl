@@ -205,7 +205,7 @@ listener_start(Listener *this)
 				          to know when to close when using HTTPServer.
 					  Maybe with connection->should_close? */
 
-#if 1
+#if 0
 				connection_shutdown(connection);
 				// listener_connection_destroy(this, connection);
 #endif

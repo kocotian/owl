@@ -27,6 +27,7 @@ struct owl_Server {
 	int	(*ev_error)(struct owl_Connection *, int);
 };
 
+int owl_server_create_unix(struct owl_Server *this, const char *path);
 int owl_server_create(struct owl_Server *this, const char *host, int port);
 int owl_server_destroy(struct owl_Server *this);
 
@@ -42,6 +43,7 @@ int owl_server_on_error(struct owl_Server *this, int (*handler)(struct owl_Conne
 	typedef struct owl_Server Server;
 
 /*	Functions */
+#	define server_create_unix owl_server_create_unix
 #	define server_create owl_server_create
 #	define server_destroy owl_server_destroy
 #	define server_on_listening owl_server_on_listening
