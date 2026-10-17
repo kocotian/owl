@@ -642,13 +642,17 @@ httpresponse_write(int fd, HTTPTransaction *t)
 	if ((w = write(fd, "\r\n", 2)) != 2)
 		return -1;
 
+	/* TODO: Check if method is not HEAD! */
 	if (nullptr != res->body) {
 		ssize_t body_tw = 0, body_w;
 		/* Only if body is present */
 		while ((body_w = write(fd, res->body + body_tw, body_len - body_tw)) != 0) {
 			if (body_w > 0)
 				body_tw += body_w;
-			else if (errno != EAGAIN && errno != EWOULDBLOCK)
+			else if (errno == EAGAIN || errno == EWOULDBLOCK)
+				/* TODO: Implement EPOLLRD!!!
+				   Here we are blocking a process and using 
+				   enormous CPU power. */
 				continue;
 			else {
 				return -1;
