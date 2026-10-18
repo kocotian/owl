@@ -19,10 +19,10 @@ struct owl_Listener {
 	int	fd;
 };
 
-int owl_listener_create(struct owl_Listener *this, struct owl_Server *server);
+[[nodiscard]] int owl_listener_create(struct owl_Listener *this, struct owl_Server *server);
 int owl_listener_destroy(struct owl_Listener *this);
-int owl_listener_register_connection(struct owl_Listener *this, struct owl_Connection *connection);
-int owl_listener_unregister_connection(struct owl_Listener *this, struct owl_Connection *connection);
+[[nodiscard]] int owl_listener_register_connection(struct owl_Listener *this, struct owl_Connection *connection);
+[[nodiscard]] int owl_listener_unregister_connection(struct owl_Listener *this, struct owl_Connection *connection);
 int owl_listener_start(struct owl_Listener *this);
 
 /* Namespace import */

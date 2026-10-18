@@ -1,18 +1,21 @@
 #include <owl/utils.h>
 
+#include <errno.h>
 #include <unistd.h>
 
 int
 safe_close(int *fd)
 {
-	if (nullptr == fd)
+	if (nullptr == fd) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (*fd < 0)
+	if (0 > *fd)
 		return 0;
 
 	int ret = close(*fd);
-	if (ret == 0)
+	if (0 == ret)
 		*fd = -1;
 
 	return ret;

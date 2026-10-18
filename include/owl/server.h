@@ -27,15 +27,15 @@ struct owl_Server {
 	int	(*ev_error)(struct owl_Connection *, int);
 };
 
-int owl_server_create_unix(struct owl_Server *this, const char *path);
-int owl_server_create(struct owl_Server *this, const char *host, int port);
+[[nodiscard]] int owl_server_create_unix(struct owl_Server *this, const char *path);
+[[nodiscard]] int owl_server_create(struct owl_Server *this, const char *host, int port);
 int owl_server_destroy(struct owl_Server *this);
 
-int owl_server_on_listening(struct owl_Server *this, int (*handler)());
-int owl_server_on_connection_established(struct owl_Server *this, int (*handler)(struct owl_Connection *));
-int owl_server_on_connection_ready(struct owl_Server *this, int (*handler)(struct owl_Connection *));
-int owl_server_on_connection_closed(struct owl_Server *this, int (*handler)(struct owl_Connection *));
-int owl_server_on_error(struct owl_Server *this, int (*handler)(struct owl_Connection *, int));
+[[nodiscard]] int owl_server_on_listening(struct owl_Server *this, int (*handler)());
+[[nodiscard]] int owl_server_on_connection_established(struct owl_Server *this, int (*handler)(struct owl_Connection *));
+[[nodiscard]] int owl_server_on_connection_ready(struct owl_Server *this, int (*handler)(struct owl_Connection *));
+[[nodiscard]] int owl_server_on_connection_closed(struct owl_Server *this, int (*handler)(struct owl_Connection *));
+[[nodiscard]] int owl_server_on_error(struct owl_Server *this, int (*handler)(struct owl_Connection *, int));
 
 /* Namespace import */
 # if defined(USING_NAMESPACE_OWL)

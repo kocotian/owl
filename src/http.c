@@ -80,11 +80,19 @@ isvchar(int c) /* returns vchar or 0 if not a vchar */
 int
 httpheader_req_get(HTTPTransaction *t, const char *key, HTTPHeader **h)
 {
-	if (nullptr == t || nullptr == key || nullptr == h)
+	/* validate input parameters */
+	if (nullptr == t || nullptr == key || nullptr == h) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (nullptr == (*h = shgetp_null(t->request.headers, key)))
+	auto header = shgetp_null(t->request.headers, key);
+	if (nullptr == header) {
+		errno = ENOENT;
 		return -1;
+	}
+
+	*h = header;
 
 	return 0;
 }
@@ -92,40 +100,59 @@ httpheader_req_get(HTTPTransaction *t, const char *key, HTTPHeader **h)
 int
 httpheader_res_set(HTTPTransaction *t, const char *key, const char *val)
 {
-	/* TODO: harden, change malloc to arena when implemented */
-	HTTPHeader h = {nullptr, nullptr};
-	size_t cap;
-	if (nullptr == (h.key = malloc(cap = strlen(key) + 1)))
-		return -1;
-
-	if ((cap - 1) != strlcpy(h.key, key, cap)) {
-		free(h.key);
+	/* validate input parameters */
+	if (nullptr == t || nullptr == key || nullptr == val) {
+		errno = EINVAL;
 		return -1;
 	}
+
+	/* TODO: harden, change malloc to arena when implemented */
+
+	HTTPHeader h = {nullptr, nullptr};
+
+	size_t kcap = strlen(key) + 1;
+	h.key = malloc(kcap);
+	if (nullptr == h.key)
+		return -1;
+
+	if ((kcap - 1) != strlcpy(h.key, key, kcap))
+		goto key_cleanup;
 
 	/* TODO: surely null-terminated? */
-	char *value = malloc(cap = strlen(val) + 1);
-	if ((cap - 1) != strlcpy(value, val, cap)) {
-		free(h.val);
-		free(h.key);
-		return -1;
-	}
+
+	size_t vcap = strlen(val) + 1;
+	char *value = malloc(vcap);
+	if ((vcap - 1) != strlcpy(value, val, vcap))
+		goto val_cleanup;
 	
 	arrput(h.val, value);
 	shputs(t->response.headers, h);
 
-	return strlen(key) + strlen(val) + 2;
+	return kcap + vcap;
+
+val_cleanup:
+	free(value);
+key_cleanup:
+	free(h.key);
+
+	return -1;
 }
 
 int
 httpheader_res_setf(HTTPTransaction *t, const char *key, const char *val_fmt, ...)
 {
+	/* validate input parameters */
+	if (nullptr == t || nullptr == key || nullptr == val_fmt) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	va_list args;
 	int ret;
 	char *val;
 
 	va_start(args, val_fmt);
-	if ((ret = vasprintf(&val, val_fmt, args)) < 0)
+	if (0 > (ret = vasprintf(&val, val_fmt, args)))
 		val = nullptr;
 	va_end(args);
 
@@ -142,22 +169,20 @@ httpheader_res_setf(HTTPTransaction *t, const char *key, const char *val_fmt, ..
 #define strlcasecmp(s1, s2, n1, n2) ((n1) - (n2) ? (n1) - (n2) : strncasecmp(s1, s2, n1))
 #define strincasecmp(str, slen, sub, sublen) ((sublen <= slen) ? strncasecmp(str, sub, sublen) : sublen - slen)
 
-#define ISPCHAR(C) (\
-		((C) == 0x21) || /* /!/ */\
-		((C) >= 0x24 && (C) <= 0x3b) || /* /$%&'()*+,-./ and /0-9/ */\
-		((C) == 0x3d) || /* /=/ */\
-		((C) >= 0x3f && (C) <= 0x5a) || /* /?/ and /A-Z/ */\
-		((C) == 0x5f) || /* /_/ */\
-		((C) >= 0x61 && (C) <= 0x7a) || /* /a-z/ */\
-		((C) == 0x7e) /* /~/ */\
-		/* See ascii(7) manual page. */\
-	)
-
-[[maybe_unused]]
-static bool
+[[nodiscard]]
+static inline bool
 ispchar(char c)
 {
-	return ISPCHAR(c);
+	return (
+		((c) == 0x21) || /* /!/ */
+		((c) >= 0x24 && (c) <= 0x3b) || /* /$%&'()*+,-./ and /0-9/ */
+		((c) == 0x3d) || /* /=/ */
+		((c) >= 0x3f && (c) <= 0x5a) || /* /?/ and /A-Z/ */
+		((c) == 0x5f) || /* /_/ */
+		((c) >= 0x61 && (c) <= 0x7a) || /* /a-z/ */
+		((c) == 0x7e) /* /~/ */
+		/* See ascii(7) manual page. */
+	);
 }
 
 [[nodiscard]]
@@ -184,8 +209,10 @@ httprequest_parse_request_line(int fd, HTTPConnectionState *st)
 	   >> BARE CR. */
 
 	/* validate input parameters */
-	if (nullptr == st || fd < 0)
+	if (0 > fd || nullptr == st) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	HTTPTransaction *t = &(st->current_transaction);
 	HTTPRequest *req = &(t->request);
@@ -196,46 +223,47 @@ httprequest_parse_request_line(int fd, HTTPConnectionState *st)
 	/* First, we are just going to check ptr[0] to determine the method,
 	   to avoid unnecessary strncmp calls. Also, we check methods in order of expected frequency
 	   (GET is most common, then POST/PUT, then others) to optimize for common cases. */
-	if (req_len_avail)
+	if (0 != req_len_avail)
 	switch (*cursor) {
 	case 'G':
 		/* And when first character is known, we can check the full method string. */
-		if (strincmp(cursor, req_len_avail, "GET", 3) == 0)
-			(req->method = HTTP_GET), cursor += 3;
-		break;
+		if (0 == strincmp(cursor, req_len_avail, "GET", 3)) {
+			req->method = HTTP_GET; cursor += 3;
+		} break;
 	case 'P':
 		/* etc... */
-		if (strincmp(cursor, req_len_avail, "POST", 4) == 0)
-			(req->method = HTTP_POST), cursor += 4;
-		else if (strincmp(cursor, req_len_avail, "PUT", 3) == 0)
-			(req->method = HTTP_PUT), cursor += 3;
-		else if (strincmp(cursor, req_len_avail, "PATCH", 5) == 0)
-			(req->method = HTTP_PATCH), cursor += 5;
-		break;
+		if (0 == strincmp(cursor, req_len_avail, "POST", 4)) {
+			req->method = HTTP_POST; cursor += 4;
+		} else if (0 == strincmp(cursor, req_len_avail, "PUT", 3)) {
+			req->method = HTTP_PUT; cursor += 3;
+		} else if (0 == strincmp(cursor, req_len_avail, "PATCH", 5)) {
+			req->method = HTTP_PATCH; cursor += 5;
+		} break;
 	case 'D':
-		if (strincmp(cursor, req_len_avail, "DELETE", 6) == 0)
-			(req->method = HTTP_DELETE), cursor += 6;
-		 break;
+		if (0 == strincmp(cursor, req_len_avail, "DELETE", 6)) {
+			req->method = HTTP_DELETE; cursor += 6;
+		} break;
 	case 'H':
-		if (strincmp(cursor, req_len_avail, "HEAD", 4) == 0)
-			(req->method = HTTP_HEAD), cursor += 4;
-		break;
+		if (0 == strincmp(cursor, req_len_avail, "HEAD", 4)) {
+			req->method = HTTP_HEAD; cursor += 4;
+		} break;
 	}
 
 	req_len_avail -= (cursor - req->raw_request);
 
 	/* And after method we expect SP */
-	if (*cursor == ' ')
-		++cursor, --req_len_avail;
-	else
+	if (' ' == *cursor) {
+		++cursor; --req_len_avail;
+	} else {
 		return_status (HTTP_STATUS_BAD_REQUEST);
+	}
 
 	/*
 	 * Okay. If none of the above matched, we have HTTP_UNKNOWN_METHOD.
 	 * According to HTTP spec, we should immediately stop parsing
 	 * and respond with:
 	 */
-	if (req->method == HTTP_UNKNOWN_METHOD)
+	if (HTTP_UNKNOWN_METHOD == req->method)
 		return_status (HTTP_STATUS_METHOD_NOT_ALLOWED);
 
 	/* Well. We have method, now we need to parse URI. */
@@ -244,10 +272,10 @@ httprequest_parse_request_line(int fd, HTTPConnectionState *st)
 
 	uri_end = cursor;
 	/* uri_end grows until SP, which marks the end of the URI. */
-	while (*uri_end && *uri_end != ' ') {
-		if (!ISPCHAR(*uri_end))
+	while ('\0' != *uri_end && ' ' != *uri_end) {
+		if (!ispchar(*uri_end))
 			return_status (HTTP_STATUS_BAD_REQUEST);
-		if (*uri_end == '%' && !(isxdigit(uri_end[1]) && isxdigit(uri_end[2])))
+		if ('%' == *uri_end && (0 == isxdigit(uri_end[1]) || 0 == isxdigit(uri_end[2])))
 			return_status (HTTP_STATUS_BAD_REQUEST);
 		uri_end++;
 	}
@@ -262,7 +290,7 @@ httprequest_parse_request_line(int fd, HTTPConnectionState *st)
 
 	/* And to fulfill the request line, last thing to parse is HTTP version.
 	   HTTP version is not case-insensitive. */
-	if (req_len_avail < 10 || memcmp(cursor, "HTTP/", 5) != 0)
+	if (req_len_avail < 10 || 0 != memcmp(cursor, "HTTP/", 5))
 		return_status (HTTP_STATUS_BAD_REQUEST);
 
 	/* For now, we don't expect HTTP/10.0 or HTTP/3.10, so we just check
@@ -308,11 +336,11 @@ httprequest_parse_header_line(HTTPConnectionState *st, char *line, size_t line_l
 
 	h.key = cursor;
 	/* cursor grows while we have tchar characters, which are valid in header names. */
-	while (req_len_avail && istchar(*cursor = tolower(*cursor)) != 0)
+	while (0 != req_len_avail && 0 != istchar(*cursor = tolower(*cursor)))
 		cursor++, req_len_avail--;
 
 	/* We expect a ':' after the header name. If not present, then it's a: */
-	if (*cursor != ':')
+	if (':' != *cursor)
 		return_status (HTTP_STATUS_BAD_REQUEST);
 
 	/* Trying to get header if it already exists */
@@ -347,14 +375,17 @@ httprequest_parse_header_line(HTTPConnectionState *st, char *line, size_t line_l
 	return 0;
 }
 
+/* Return -1 if we can't read body because of server problem (5xx)
+   Return  1 ""   ""   ""   ""   ""   ""   "" client problem (4xx) */
+/* TODO: just rewrite that... */
 [[nodiscard]]
 static int
-httprequest_read_body(int fd, HTTPConnectionState *st, char *data, size_t length)
+httprequest_read_body([[maybe_unused]] int fd, HTTPConnectionState *st, char *data, size_t length)
 {
-	(void)fd; (void)data;
-
-	if (nullptr == st || (nullptr == data && length != 0))
+	if (nullptr == st || nullptr == data || 0 == length) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	HTTPTransaction *t = &(st->current_transaction);
 	HTTPRequest *req = &(t->request);
@@ -368,7 +399,7 @@ httprequest_read_body(int fd, HTTPConnectionState *st, char *data, size_t length
 
 	/* TODO: Check if content_length have exacly one item.
 	   Should move it to parser. */
-	if (arrlen(content_length->val) != 1)
+	if (1 != arrlen(content_length->val))
 		return -1;
 
 	size_t clen = atol(content_length->val[0]);
@@ -397,6 +428,11 @@ httprequest_read_body(int fd, HTTPConnectionState *st, char *data, size_t length
 static int
 httprequest_parse(int fd, HTTPConnectionState *st)
 {
+	if (0 > fd || nullptr == st) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	HTTPTransaction *t = &(st->current_transaction);
 	HTTPRequest *req = &(t->request);
 
@@ -435,17 +471,17 @@ httprequest_parse(int fd, HTTPConnectionState *st)
 		   (^1) - Parsing is done in destructive way - When parsing eg. headers, we will
 		   change \r to \0, so we have null-terminated header value. We should check that!
 		   NULLF is "\0\n", as defined above. */
-		if (!line_length
+		if ((0 == line_length)
 		&&  offset >= (2 * (signed)(sizeof CRLF - 1))
-		&&  (!memcmp(beginning - (sizeof  CRLF - 1),  CRLF, sizeof  CRLF - 1)
-		  || !memcmp(beginning - (sizeof NULLF - 1), NULLF, sizeof NULLF - 1))
+		&&  (0 == memcmp(beginning - (sizeof  CRLF - 1),  CRLF, sizeof  CRLF - 1)
+		  || 0 == memcmp(beginning - (sizeof NULLF - 1), NULLF, sizeof NULLF - 1))
 		&&  end) {
-			if (!req->request_line)
+			if (nullptr == req->request_line)
 				return_status (HTTP_STATUS_BAD_REQUEST);
 			req->body = st->cursor + 2;
 		}
 
-		if (req->body) {
+		if (nullptr != req->body) {
 			offset = req->body - st->buffer;
 			// ptrdiff_t body_buffer_offset;
 			int read_body = httprequest_read_body(fd, st, req->body, st->buffer_length - offset);
@@ -454,7 +490,7 @@ httprequest_parse(int fd, HTTPConnectionState *st)
 			return 0;
 		}
 
-		if (!end) {
+		if (nullptr == end) {
 			/* If CRLF was not found, it means that
 			   - full line was not sent yet, so we are waiting for rest of it, or
 			   - we've parsed entire header, and now it is time for reading a body.
@@ -464,16 +500,16 @@ httprequest_parse(int fd, HTTPConnectionState *st)
 		}
 
 		/* If request_line is not set, we parse first line as request line. */
-		if (!req->request_line) {
+		if (nullptr == req->request_line) {
 			int parse_request_line = httprequest_parse_request_line(fd, st);
-			if (parse_request_line)
+			if (0 != parse_request_line)
 				return parse_request_line;
 
 			st->cursor = beginning + line_length + (sizeof CRLF - 1);
 		/* Else, if request body is not set, we are parsing headers. */
 		} else {
 			int parse_header_line = httprequest_parse_header_line(st, beginning, line_length);
-			if (parse_header_line)
+			if (0 != parse_header_line)
 				return parse_header_line;
 		/* If we have a request line and body is set, we should read body. */
 		}
@@ -502,8 +538,10 @@ httprequest_parse(int fd, HTTPConnectionState *st)
 int
 httprequest_read(int fd, HTTPConnectionState *st)
 {
-	if (nullptr == st || fd < 0)
+	if (nullptr == st || 0 > fd) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	HTTPTransaction *t = &(st->current_transaction);
 	HTTPRequest *req = &(t->request);
@@ -531,22 +569,23 @@ httprequest_read(int fd, HTTPConnectionState *st)
 		}
 	}
 
-	if (r < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
+	if (0 > r && (errno != EAGAIN && errno != EWOULDBLOCK)) {
 		/* An actual error occurred */
 		fprintf(stderr, "[ERROR] read(fd: %d): %s\n", fd, strerror(errno));
 		return_status (HTTP_STATUS_INTERNAL_SERVER_ERROR);
 	}
 
-	/* If r == 0, it means the connection was closed by the client. */
-	if (r == 0) {
+	/* If r is 0, it means the connection was closed by the client. */
+	if (0 == r) {
 		fprintf(stderr, "[ERROR] read(fd: %d): Connection closed by pear.\n", fd);
 		/* If we haven't read any data yet, this is a... */
-		if (st->buffer_length == 0) {
+		if (0 == st->buffer_length) {
 			fprintf(stderr, "No data read.\n");
 			return_status (HTTP_STATUS_BAD_REQUEST);
 		}
 		/* Otherwise, just shutdown */
 		/* @TODO: ADD SHUTDOWN */
+		/* @TODO: IS THAT CODE BELOW ADDED SHUTDOWN THAT IT IS SAID ABOVE? */
 		connection_shutdown(st->connection);
 		return 0;
 	}
@@ -563,14 +602,14 @@ httprequest_read(int fd, HTTPConnectionState *st)
 	req->raw_request_len = st->buffer_length;
 	req->raw_request_cap = st->buffer_capacity;
 
-	if (!st->cursor)
+	if (nullptr == st->cursor)
 		st->cursor = st->buffer;
 
 	int parse = httprequest_parse(fd, st);
 
-	if (parse <= -100)
+	if (-100 >= parse)
 		return -parse;
-	if (parse < 0)
+	if (0 > parse)
 		return HTTP_STATUS_INTERNAL_SERVER_ERROR;
 
 	return 0;
@@ -583,8 +622,10 @@ httpresponse_write(int fd, HTTPTransaction *t)
 	/* XXX: should be reimplemented with epoll, like _read */
 
 	/* validate input parameters */
-	if (nullptr == t || fd < 0)
+	if (nullptr == t || 0 > fd) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	HTTPResponse *res = &(t->response);
 
@@ -595,7 +636,7 @@ httpresponse_write(int fd, HTTPTransaction *t)
 
 	/* initialization of tw with status line */
 	tw = dprintf(fd, "HTTP/1.1 %d %s\r\n", t->status_code, http_status_str(t->status_code));
-	if (tw < 0) {
+	if (0 > tw) {
 		   if (errno != EAGAIN && errno != EWOULDBLOCK)
 			return -1;
 	}
@@ -630,16 +671,19 @@ httpresponse_write(int fd, HTTPTransaction *t)
 
 		for (j = 0; j < arrlen(res->headers[i].val); ++j) {
 			w = dprintf(fd, "%s: %s\r\n", res->headers[i].key, res->headers[i].val[j]);
-			if (w < 0) {
+			if (0 > w) {
 				if (errno != EAGAIN && errno != EWOULDBLOCK)
+					/* syscall - errno is set */
 					return -1;
 				--i; /* retry this header */
+				/* TODO: analyze that */
 			}
 			tw += w;
 		}
 	}
 
-	if ((w = write(fd, "\r\n", 2)) != 2)
+	if (2 != (w = write(fd, "\r\n", 2)))
+		/* syscall - errno is set */
 		return -1;
 
 	/* TODO: Check if method is not HEAD! */
@@ -647,7 +691,7 @@ httpresponse_write(int fd, HTTPTransaction *t)
 		ssize_t body_tw = 0, body_w;
 		/* Only if body is present */
 		while ((body_w = write(fd, res->body + body_tw, body_len - body_tw)) != 0) {
-			if (body_w > 0)
+			if (0 < body_w)
 				body_tw += body_w;
 			else if (errno == EAGAIN || errno == EWOULDBLOCK)
 				/* TODO: Implement EPOLLRD!!!
@@ -655,8 +699,8 @@ httpresponse_write(int fd, HTTPTransaction *t)
 				   enormous CPU power. */
 				continue;
 			else {
+				/* syscall - errno is set */
 				return -1;
-				/* TODO: some error */
 			}
 		}
 		if (body_tw != (ssize_t)body_len)
@@ -674,14 +718,16 @@ httpresponse_write(int fd, HTTPTransaction *t)
 static int
 httpserver_default_connection_handler(Connection *connection)
 {
-	if (nullptr == connection)
+	if (nullptr == connection) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	HTTPConnectionState *st = nullptr;
 	HTTPTransaction *t = nullptr;
 	int status;
 
-	if (!connection->state) {
+	if (nullptr == connection->state) {
 		st = calloc(1, sizeof *st);
 		httpconnectionstate_create(st, (HTTPServer *)connection->server);
 		st->connection = connection;
@@ -694,9 +740,9 @@ httpserver_default_connection_handler(Connection *connection)
 	/* TODO: destroy transaction */
 
 	/* Read the request and parse it */
-	if ((status = httprequest_read(connection->fd, st)) < 0) {
+	if (0 > (status = httprequest_read(connection->fd, st))) {
 		/* Something went wrong when reading. */
-		if (!t->status_code)
+		if (0 == t->status_code)
 			/* Fatal error while parsing request, we should close
 			** connection immediately */
 			return -1;
@@ -705,16 +751,16 @@ httpserver_default_connection_handler(Connection *connection)
 		/* TODO: Acknowledge what did I did here */
 	} else {
 		/* We have got a status code when parsing. We should respond now. */
-		if (status >= 300) {
+		if (300 <= status) {
 			t->status_code = status;
 
 			/* Handle error */
-			if (t->server->ev_status_code)
+			if (0 != t->server->ev_status_code)
 				t->server->ev_status_code(t);
 
 		/* If parsing is not done yet, do nothing. */
 		} else {
-			if (!st->done)
+			if (0 == st->done)
 				return 0;
 
 			/* Successfully parsed request, generate normal response. */
@@ -724,14 +770,14 @@ httpserver_default_connection_handler(Connection *connection)
 		t->request.response = &(t->response);
 
 		/* If everything went good, we can begin transaction */
-		if (t->server->ev_transaction)
+		if (nullptr != t->server->ev_transaction)
 			/* @TODO: if line below fails, we should make some error */
 			t->server->ev_transaction(t);
 		else
 			t->status_code = HTTP_STATUS_INTERNAL_SERVER_ERROR; /* Internal Server Error */
 	}
 
-	if (httpresponse_write(connection->fd, t) < 0)
+	if (0 > httpresponse_write(connection->fd, t))
 		/* Maybe returning some error? */
 		return -1;
 
@@ -751,14 +797,16 @@ int
 httpserver_create_unix(HTTPServer *this, const char *path)
 {
 	/* validate input parameters */
-	if (!this || !path)
+	if (nullptr == this || nullptr == path) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (server_create_unix((Server *)this, path) < 0)
+	if (0 > server_create_unix((Server *)this, path))
 		return -2;
 
 	/* default HTTP handlers */
-	if (server_on_connection_ready((Server *)this, httpserver_default_connection_handler) < 0)
+	if (0 > server_on_connection_ready((Server *)this, httpserver_default_connection_handler))
 		return -3;
 
 	return 0;
@@ -768,15 +816,17 @@ int
 httpserver_create(HTTPServer *this, const char *host, int port)
 {
 	/* validate input parameters */
-	if (!this || !host || port <= 0 || port >= 65536)
+	if (nullptr == this || nullptr == host || port <= 0 || port >= 65536) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (0 > server_create((Server *)this, host, port))
 		return -1;
 
-	if (server_create((Server *)this, host, port) < 0)
-		return -2;
-
 	/* default HTTP handlers */
-	if (server_on_connection_ready((Server *)this, httpserver_default_connection_handler) < 0)
-		return -3;
+	if (0 > server_on_connection_ready((Server *)this, httpserver_default_connection_handler))
+		return -1;
 
 	return 0;
 }
@@ -784,8 +834,11 @@ httpserver_create(HTTPServer *this, const char *host, int port)
 int
 httptransaction_create(HTTPTransaction *this, HTTPServer *server)
 {
-	if (!this || !server)
+	/* validate input parameters */
+	if (nullptr == this || nullptr == server) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	/* Assign original server */
 	this->server = server;
@@ -796,10 +849,13 @@ httptransaction_create(HTTPTransaction *this, HTTPServer *server)
 int
 httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server)
 {
-	if (!this)
+	/* validate input parameters */
+	if (nullptr == this) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (httptransaction_create(&(this->current_transaction), server) < 0)
+	if (0 > httptransaction_create(&(this->current_transaction), server))
 		return -1;
 
 	/* Then get data for request to be read.
@@ -817,16 +873,20 @@ httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTP
 /* Generic event setter macro */
 #define HTTPSERVER_ON(EV, HANDLER)                                   \
 	int                                                          \
-	httpserver_on_##EV(HTTPServer *this, HANDLER)         \
+	httpserver_on_##EV(HTTPServer *this, HANDLER)                \
 	{                                                            \
-		if (nullptr == this)                                 \
+		if (nullptr == this) {                               \
+			errno = EINVAL;                              \
 			return -1;                                   \
+		}                                                    \
                                                                      \
                 /* You can't rewrite handler if one is available,    \
                    as it will return an error.                       \
                    First, null previous handler with this fn. */     \
-		if (nullptr != this->ev_##EV && nullptr != handler)  \
-			return -2;                                   \
+		if (nullptr != this->ev_##EV && nullptr != handler) {\
+			errno = EBUSY;                               \
+			return -1;                                   \
+                }                                                    \
                                                                      \
 		this->ev_##EV = handler;                             \
                                                                      \

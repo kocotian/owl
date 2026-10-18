@@ -21,20 +21,23 @@ int
 connection_create(Connection *this, Server *server)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == server)
+	if (nullptr == this || nullptr == server) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	/* Set to default values. */
 	this->server = server;
 	/* Accepting incoming connection. */
 	/* TODO: We should get sockaddr. */
 	this->fd = accept4(server->fd, nullptr, nullptr, SOCK_NONBLOCK);
-	if (this->fd < 0)
+	if (0 > this->fd)
+		/* syscall - errno is set */
 		return -1;
 
 	/* Great. We can send event that connection is established. */
-	if (this->server->ev_connection_established)
-		if (this->server->ev_connection_established(this) < 0)
+	if (nullptr != this->server->ev_connection_established)
+		if (0 > this->server->ev_connection_established(this))
 			goto cleanup;
 
 	/* We had listener_add_connection().
@@ -53,10 +56,13 @@ int
 connection_shutdown(Connection *this)
 {
 	/* validate input parameters */
-	if (nullptr == this)
+	if (nullptr == this) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	if (0 > shutdown(this->fd, SHUT_WR))
+		/* syscall - errno is set */
 		return -1;
 
 	return (int)(this->shutdown = true);
@@ -66,11 +72,14 @@ int
 connection_destroy(Connection *this)
 {
 	/* validate input parameters */
-	if (nullptr == this)
+	if (nullptr == this) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (this->fd < 0) {
+	if (0 > this->fd) {
 		/* Already closed */
+		errno = EBADF;
 		return -1;
 	}
 

@@ -19,13 +19,16 @@ int
 listener_create(Listener *this, Server *server)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == server)
+	if (nullptr == this || nullptr == server) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	this->server = server;
 
 	/* And create an epoll instance */
-	if ((this->fd = epoll_create1(0)) < 0)
+	if (0 > (this->fd = epoll_create1(0)))
+		/* syscall - errno is set */
 		return -1;
 
 	return 0;
@@ -34,6 +37,12 @@ listener_create(Listener *this, Server *server)
 int
 listener_destroy(Listener *this)
 {
+	/* validate input parameters */
+	if (nullptr == this) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	return safe_close(&(this->fd));
 }
 
@@ -42,13 +51,18 @@ int
 listener_register_connection(Listener *this, Connection *connection)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == connection)
+	if (nullptr == this || nullptr == connection) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (epoll_ctl(this->fd, EPOLL_CTL_ADD, connection->fd, &(struct epoll_event){
-			.events = EPOLLIN | EPOLLET,
-			.data.ptr = connection
-		}) < 0)
+	struct epoll_event ev = {
+		.events = EPOLLIN | EPOLLET,
+		.data.ptr = connection
+	};
+
+	if (0 > epoll_ctl(this->fd, EPOLL_CTL_ADD, connection->fd, &ev))
+		/* syscall - errno is set */
 		return -1;
 
 	/* TODO: Maybe some connection list? */
@@ -61,10 +75,13 @@ int
 listener_unregister_connection(Listener *this, Connection *connection)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == connection)
+	if (nullptr == this || nullptr == connection) {
+		errno = EINVAL;
 		return -1;
+	}
 
-	if (epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr) < 0)
+	if (0 > epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr))
+		/* syscall - errno is set */
 		return -1;
 
 	return 0;
@@ -74,8 +91,10 @@ int
 listener_start(Listener *this)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == this->server)
+	if (nullptr == this || nullptr == this->server) {
+		errno = EINVAL;
 		return -1;
+	}
 
 	/*  ignore SIGPIPE to prevent crashes
 	**  when writing to closed sockets.
@@ -91,7 +110,8 @@ listener_start(Listener *this)
 #endif
 
 	/* start listening on the server's socket */
-	if (listen(this->server->fd, 128) < 0)
+	if (0 > listen(this->server->fd, 128))
+		/* syscall - errno is set */
 		return -1;
 
 #ifdef __linux__
@@ -100,14 +120,15 @@ listener_start(Listener *this)
 	struct epoll_event ev = {};
 	struct epoll_event events[MAX_EVENTS];
 
-	if ((this->server->ev_listening)
-	&&  (this->server->ev_listening() < 0))
-		return -1;
+	if (nullptr != this->server->ev_listening)
+		if (0 > this->server->ev_listening())
+			/* owl API - errno is set */
+			return -1;
 
 	/* Add server's fd for read events */
 	ev.events = EPOLLIN | EPOLLHUP | EPOLLRDHUP; /* Notify when the listening socket is ready to accept. */
 	ev.data.ptr = this->server;
-	if (epoll_ctl(this->fd, EPOLL_CTL_ADD, this->server->fd, &ev) < 0)
+	if (0 > epoll_ctl(this->fd, EPOLL_CTL_ADD, this->server->fd, &ev))
 		return -1;
 
 	while (this->server->up) {
@@ -118,7 +139,7 @@ listener_start(Listener *this)
 			if (errno == EINTR || errno == EAGAIN)
 				continue;
 
-			/* Any other error */
+			/* Any other error, errno is set by epoll_wait */
 			safe_close(&(this->fd));
 			return -1;
 		}
@@ -160,13 +181,13 @@ listener_start(Listener *this)
 					connection_shutdown(connection);
 				}
 
-				if (connection->shutdown == true) {
+				if (connection->shutdown) {
 					/* Gracefully shutdown TCP connection. */
 					int rd;
 					char useless[512];
 
-					if ((rd = read(connection->fd, useless, 512)) != 0) {
-						if (rd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+					if (0 != (rd = read(connection->fd, useless, 512))) {
+						if (0 > rd && errno != EAGAIN && errno != EWOULDBLOCK) {
 							perror("read");
 							if (0 > listener_unregister_connection(this, connection))
 								continue;
@@ -176,8 +197,9 @@ listener_start(Listener *this)
 					}
 
 					/* Send event that we closed a connection. */
-					if (connection->server->ev_connection_closed)
-						if (connection->server->ev_connection_closed(connection) < 0)
+					if (nullptr != connection->server->ev_connection_closed)
+						if (0 > connection->server->ev_connection_closed(connection))
+							/* owl API - errno is set */
 							return -1;
 
 					if (0 > listener_unregister_connection(this, connection))
@@ -191,8 +213,8 @@ listener_start(Listener *this)
 				   to be read. We should read everything on one shot,
 				   but it could be not a full data to be read. */
 
-				if ((this->server->ev_connection_ready)
-				&&  (this->server->ev_connection_ready(connection) < 0)) {
+				if (nullptr != this->server->ev_connection_ready
+				&&  0 > (this->server->ev_connection_ready(connection))) {
 					if (0 > listener_unregister_connection(this, connection))
 						continue;
 

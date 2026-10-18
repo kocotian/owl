@@ -15,7 +15,7 @@ struct owl_Connection {
 
 /* On object's create(), connection is accept()'ed from a server
    and an event about establishing connection is send. */
-int owl_connection_create(struct owl_Connection *this, struct owl_Server *server);
+[[nodiscard]] int owl_connection_create(struct owl_Connection *this, struct owl_Server *server);
 
 int owl_connection_shutdown(struct owl_Connection *this);
 
