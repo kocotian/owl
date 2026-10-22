@@ -62,6 +62,13 @@ struct owl_HTTPRequest {
 };
 
 struct owl_HTTPResponse {
+	/* Raw response (entire payload). */
+	char *raw_response;
+	size_t raw_response_len, raw_response_cap;
+
+	char *cursor;
+	bool is_preparing_done;
+
 	struct owl_HTTPHeader *headers;
 
 	char *body;
@@ -114,6 +121,7 @@ int owl_httpheader_res_get(struct owl_HTTPTransaction *t, const char *key, struc
 int owl_httpheader_res_set(struct owl_HTTPTransaction *t, const char *key, const char *val);
 int owl_httpheader_res_setf(struct owl_HTTPTransaction *t, const char *key, const char *val_fmt, ...);
 int owl_httprequest_read(int fd, struct owl_HTTPConnectionState *st);
+int owl_httpresponse_prepare(struct owl_HTTPTransaction *t);
 int owl_httpresponse_write(int fd, struct owl_HTTPTransaction *t);
 int owl_httpserver_create_unix(struct owl_HTTPServer *this, const char *path);
 int owl_httpserver_create(struct owl_HTTPServer *this, const char *host, int port);
@@ -145,6 +153,7 @@ int owl_httpserver_on_transaction(struct owl_HTTPServer *, int (*handler)(struct
 #	define httpheader_res_set owl_httpheader_res_set
 #	define httpheader_res_setf owl_httpheader_res_setf
 #	define httprequest_read owl_httprequest_read
+#	define httpresponse_prepare owl_httpresponse_prepare
 #	define httpresponse_write owl_httpresponse_write
 #	define httpserver_create_unix owl_httpserver_create_unix
 #	define httpserver_create owl_httpserver_create

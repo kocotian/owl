@@ -550,7 +550,9 @@ httprequest_read(int fd, HTTPConnectionState *st)
 
 	/* We will read to a buffer at most [capacity - length + <null terminator>] bytes
 	   until readable. */
-	while ((r = read(fd, st->buffer + st->buffer_length, st->buffer_capacity - (st->buffer_length + 1))) > 0) {
+	while ((r = recv(fd, st->buffer + st->buffer_length,
+			st->buffer_capacity - (st->buffer_length + 1),
+			0)) > 0) {
 		/* Length of data read grows by r. */
 		st->buffer_length += r;
 
@@ -615,11 +617,136 @@ httprequest_read(int fd, HTTPConnectionState *st)
 	return 0;
 }
 
+static inline int
+xwrite(HTTPTransaction *t, const char *const restrict data, size_t outlen)
+{
+	HTTPResponse *res = &(t->response);
+
+	ssize_t cldiff = res->raw_response_cap - res->raw_response_len;
+	if (0 == outlen)
+		outlen = strlen(data);
+
+	if ((ssize_t)outlen < 0)
+		/* TODO: temporary */
+		return -1;
+
+	if (cldiff < 64 || (ssize_t)outlen > cldiff) {
+		/* 64 = sqrt(4096) */
+		int new_cap = res->raw_response_cap;
+		do {
+			new_cap <<= 1;
+		} while (new_cap - res->raw_response_len < outlen);
+		typeof_unqual (res->raw_response) new_response =
+			realloc(res->raw_response, new_cap);
+		if (nullptr == new_response)
+			return -1;
+		res->raw_response = new_response;
+		res->raw_response_cap = new_cap;
+	}
+
+	if (res->raw_response_cap - res->raw_response_len < outlen)
+		return -1;
+
+	memcpy(res->raw_response + res->raw_response_len, data, outlen);
+	res->raw_response_len += outlen;
+
+	return 0;
+}
+
+static inline int
+xprintf(HTTPTransaction *t, const char *fmt, ...)
+{
+	HTTPResponse *res = &(t->response);
+
+	va_list ap;
+	va_start(ap, fmt);
+	ssize_t outlen = vsnprintf(nullptr, 0, fmt, ap);
+	va_end(ap);
+
+	if (outlen < 0)
+		return -1;
+
+	ssize_t cldiff = res->raw_response_cap - res->raw_response_len;
+
+	if (cldiff < 64 || ((ssize_t)outlen + 1) > cldiff) {
+		/* 64 = sqrt(4096) */
+		int new_cap = res->raw_response_cap;
+		do {
+			new_cap <<= 1;
+		} while (new_cap - res->raw_response_len < (outlen + 1));
+		typeof_unqual (res->raw_response) new_response =
+			realloc(res->raw_response, new_cap);
+		if (nullptr == new_response)
+			return -1;
+		res->raw_response = new_response;
+		res->raw_response_cap = new_cap;
+	}
+
+	if (res->raw_response_cap - res->raw_response_len < outlen)
+		return -1;
+
+	va_start(ap, fmt);
+	int tb = vsnprintf(res->raw_response + res->raw_response_len,
+		res->raw_response_cap - res->raw_response_len, fmt, ap);
+	if (tb != outlen)
+		return -1;
+	res->raw_response_len += outlen;
+	va_end(ap);
+
+	return tb;
+}
+
+[[nodiscard]]
+int
+httpresponse_prepare(HTTPTransaction *t)
+{
+	if (nullptr == t) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	HTTPResponse *res = &(t->response);
+
+	res->raw_response = malloc(res->raw_response_cap = 4096);
+
+	xprintf(t, "HTTP/1.1 %d %s\r\n", t->status_code, http_status_str(t->status_code));
+
+	size_t body_len = 0;
+	if (nullptr != res->body)
+		/* If there is a body, we can set body_len. */
+		/* TODO: (when implementing String View?), we should
+		   definitely remove strlen */
+		body_len = res->content_length ?: strlen(res->body);
+
+	/* TODO: Connection close is hardcoded, when we'll
+	   make keep-alive alive, we can recreate line below
+	   to decide whether connection'll be closed or not. */
+	xwrite(t, "Connection: close\r\n", 0);
+
+	for (int i = 0; i < shlen(res->headers); i++) {
+		for (int j = 0; j < arrlen(res->headers[i].val); ++j)
+			xprintf(t, "%s: %s\r\n", res->headers[i].key, res->headers[i].val[j]);
+	}
+
+	/* If we do not have body, we just write another CRLF. */
+	if (0 == body_len)
+		xwrite(t, "\r\n", 2);
+	else {
+		/* But if body is present, we'll append a header and send. */
+		/* TODO: Check if method is not HEAD! */
+		xprintf(t, "Content-Length: %zu\r\n\r\n", body_len);
+
+		xwrite(t, res->body, body_len);
+	}
+
+	return res->raw_response_len;
+}
+
 [[nodiscard]]
 int
 httpresponse_write(int fd, HTTPTransaction *t)
 {
-	/* XXX: should be reimplemented with epoll, like _read */
+	/* XXX: should be reimplemented with epoll, like _read. */
 
 	/* validate input parameters */
 	if (nullptr == t || 0 > fd) {
@@ -629,87 +756,29 @@ httpresponse_write(int fd, HTTPTransaction *t)
 
 	HTTPResponse *res = &(t->response);
 
-	/* total written bytes and last write */
-	ssize_t tw, w;
-	size_t body_len = 0;
-	int i, j; /* iterator */
-
-	/* initialization of tw with status line */
-	tw = dprintf(fd, "HTTP/1.1 %d %s\r\n", t->status_code, http_status_str(t->status_code));
-	if (0 > tw) {
-		   if (errno != EAGAIN && errno != EWOULDBLOCK)
+	ssize_t resp_tw = 0, resp_w;
+	while ((resp_w = send(fd, res->raw_response + resp_tw,
+			res->raw_response_len - resp_tw,
+			MSG_NOSIGNAL)) != 0) {
+		if (0 < resp_w) {
+			resp_tw += resp_w;
+			continue;
+		} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			/* TODO: Implement EPOLLRD!!!
+			   Here we are blocking a process and using 
+			   enormous CPU power. */
+			continue;
+		} else if (errno == EINTR) {
+			continue;
+		} else {
+			/* syscall - errno is set */
 			return -1;
-	}
-
-	/* TODO: (... && res->content_length > 0) */
-	if (nullptr == res->body)
-		/* If there is no body, body_len becomes 0. */
-		body_len = 0;
-	else
-		/* Otherwise, we can set body_len */
-		body_len = res->content_length ?: strlen(res->body);
-	httpheader_pushf(t, "Content-Length", "%zu", body_len);
-
-#if 0
-	/* keep connection alive if client sent appropriate header */
-	if (nullptr == shgetp_null(t->request.headers, "connection")
-	||  strncmp(shgets(t->request.headers, "connection").val, "keep-alive", strlen("keep-alive")))
-		httpheader_pushf(t, "Connection", "close");
-	else
-		httpheader_pushf(t, "Connection", "keep-alive");
-#else
-	httpheader_pushf(t, "Connection", "close");
-#endif
-
-	/* headers will initialize w and add to tw */
-	for (i = 0; i < shlen(res->headers); i++) {
-		/* @todo: BUG stopping server immediately without any message
-		   when holding F5 in a browser. strace says that it just
-		   gets SIGPIPE. 
-
-		   @update: probably fixed */
-
-		for (j = 0; j < arrlen(res->headers[i].val); ++j) {
-			w = dprintf(fd, "%s: %s\r\n", res->headers[i].key, res->headers[i].val[j]);
-			if (0 > w) {
-				if (errno != EAGAIN && errno != EWOULDBLOCK)
-					/* syscall - errno is set */
-					return -1;
-				--i; /* retry this header */
-				/* TODO: analyze that */
-			}
-			tw += w;
 		}
 	}
-
-	if (2 != (w = write(fd, "\r\n", 2)))
-		/* syscall - errno is set */
+	if (resp_tw != res->raw_response_len) {
+		errno = EIO;
 		return -1;
-
-	/* TODO: Check if method is not HEAD! */
-	if (nullptr != res->body) {
-		ssize_t body_tw = 0, body_w;
-		/* Only if body is present */
-		while ((body_w = write(fd, res->body + body_tw, body_len - body_tw)) != 0) {
-			if (0 < body_w)
-				body_tw += body_w;
-			else if (errno == EAGAIN || errno == EWOULDBLOCK)
-				/* TODO: Implement EPOLLRD!!!
-				   Here we are blocking a process and using 
-				   enormous CPU power. */
-				continue;
-			else {
-				/* syscall - errno is set */
-				return -1;
-			}
-		}
-		if (body_tw != (ssize_t)body_len)
-			return -1;
-
-		w = body_tw;
 	}
-
-	tw += w + 2;
 
 	return 0;
 }
@@ -776,6 +845,9 @@ httpserver_default_connection_handler(Connection *connection)
 		else
 			t->status_code = HTTP_STATUS_INTERNAL_SERVER_ERROR; /* Internal Server Error */
 	}
+
+	if (0 > httpresponse_prepare(t))
+		return -1;
 
 	if (0 > httpresponse_write(connection->fd, t))
 		/* Maybe returning some error? */

@@ -96,19 +96,6 @@ listener_start(Listener *this)
 		return -1;
 	}
 
-	/*  ignore SIGPIPE to prevent crashes
-	**  when writing to closed sockets.
-	**  @TODO: handle EPIPE errors on all write()
-	**  and dprintf()'s
-	**  @TODO: MUST change read() to recv() and
-	**  write() to send(), and implement some kind of
-	**  network printf() as a dprintf() with
-	**  send() instead of write()?
-	*/
-#ifndef DONT_TOUCH_MY_SIGPIPE
-	signal(SIGPIPE, SIG_IGN);
-#endif
-
 	/* start listening on the server's socket */
 	if (0 > listen(this->server->fd, 128))
 		/* syscall - errno is set */
@@ -154,7 +141,7 @@ listener_start(Listener *this)
 				   inside Listener or somewhere. */
 
 				if (nullptr == connection) {
-					printf("Failed to allocate memory for new connection: %s\n", strerror(errno));
+					fprintf(stderr, "Failed to allocate memory for new connection: %s\n", strerror(errno));
 					continue;
 				}
 
