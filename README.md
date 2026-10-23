@@ -7,7 +7,7 @@
 > of arena allocator (in v0.1).
 
 **Open Web Libraries** (`owl`) is a project to bring set of simple,
-fast and secure web libraries for C.
+fast and secure web libraries for C. **Single threaded**!
 
 It provides a set of portable and easy-to-use APIs for building web
 applications, including HTTP server (routing, middleware, and more soon).
