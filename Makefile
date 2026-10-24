@@ -9,10 +9,12 @@ CFLAGS = -std=gnu23 -O3 -fhardened -march=native \
 #	 stb_ds is full of warnings, off for now
 #	 -Wconversion -Wsign-conversion \
 #	 -Wundef
+#	 -fsanitize=address,leak,undefined \
 
 CPPFLAGS = -Iinclude -I.
 
 SRC = src/utils.c \
+      src/arena.c \
       src/server.c src/listener.c src/connection.c \
       src/http.c \
       src/stb_ds.c
