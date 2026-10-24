@@ -30,4 +30,4 @@ ${TARGET}: ${OBJ}
 	${CC} ${CPPFLAGS} ${CFLAGS} -c $< -o $@
 
 clean:
-	rm -f concert *.o src/*.o
+	rm -f ${TARGET} ${OBJ}
