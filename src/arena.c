@@ -1,11 +1,16 @@
+#define USING_NAMESPACE_OWL
+
 #include <owl/arena.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include <sys/mman.h>
 #include <errno.h>
+#include <string.h>
 
 [[nodiscard]]
 int
-owl_arenaallocator_create(struct owl_ArenaAllocator *this)
+arenaallocator_create(struct ArenaAllocator *const this)
 {
 	if (nullptr == this) {
 		errno = EINVAL;
@@ -38,8 +43,8 @@ owl_arenaallocator_create(struct owl_ArenaAllocator *this)
 /* Getting arena means we just and return current (position) block
    and move position right. */
 [[nodiscard]]
-struct owl_Arena *
-owl_arena_get(struct owl_ArenaAllocator *allocator)
+struct Arena *
+arena_get(struct ArenaAllocator *const allocator)
 {
 	if (nullptr == allocator) {
 		errno = EINVAL;
@@ -54,7 +59,7 @@ owl_arena_get(struct owl_ArenaAllocator *allocator)
 
 /* Returning arena means we should move position left. */
 int
-owl_arena_return(struct owl_Arena *arena)
+arena_return(struct Arena *arena)
 {
 	if (nullptr == arena) {
 		errno = EINVAL;
@@ -82,15 +87,16 @@ owl_arena_return(struct owl_Arena *arena)
 		arena = aa->blocks + (aa->position - 1);
 	}
 
-	arena->offset = 0;
-	arena->last = 0;
+	if (arena_clear(arena) < 0) /* always false */
+		return 0;
+
 	--aa->position;
 
 	return 0;
 }
 
 int
-owl_arenaallocator_destroy(struct owl_ArenaAllocator *this)
+arenaallocator_destroy(struct ArenaAllocator *const this)
 {
 	if (nullptr == this) {
 		errno = EINVAL;
@@ -102,7 +108,7 @@ owl_arenaallocator_destroy(struct owl_ArenaAllocator *this)
 
 [[nodiscard]]
 void *
-owl_arena_alloc(struct owl_Arena *this, size_t size)
+arena_alloc(struct Arena *const this, size_t size)
 {
 	if (nullptr == this || 0 == size) {
 		errno = EINVAL;
@@ -121,4 +127,86 @@ owl_arena_alloc(struct owl_Arena *this, size_t size)
 	this->last = this->offset;
 	this->offset += size;
 	return ret;
+}
+
+[[nodiscard]]
+void *
+arena_calloc(struct Arena *const this, size_t size)
+{
+	/* validation is skipped here, because arena_alloc
+	   will validate and set errno if needed */
+	auto ret = arena_alloc(this, size);
+	if (nullptr == ret)
+		return nullptr;
+	memset(ret, 0, size);
+	return ret;
+}
+
+[[nodiscard]]
+void *
+arena_resize(struct Arena *const this, void *const mem, size_t size)
+{
+	if (nullptr == this || nullptr == mem || 0 == size) {
+		errno = EINVAL;
+		return nullptr;
+	}
+
+	if (0 > this->last || mem != this->memory + this->last) {
+		errno = EADDRNOTAVAIL;
+		return nullptr;
+	}
+
+	size = (size + 7) & ~7;
+
+	if (this->last + size > arena_block_size) {
+		errno = ENOMEM;
+		return nullptr;
+	}
+
+	this->offset = this->last + size;
+	return mem;
+}
+
+[[nodiscard]]
+void *
+arena_realloc(struct Arena *const this, void *const mem, size_t oldsize, size_t newsize)
+{
+	if (nullptr == this || (0 == oldsize && nullptr != mem) || 0 == newsize) {
+		errno = EINVAL;
+		return nullptr;
+	}
+
+	if (nullptr == mem)
+		return arena_alloc(this, newsize);
+
+	void *ret = arena_resize(this, mem, newsize);
+	if (nullptr == ret) {
+		if (ENOMEM == errno)
+			return nullptr;
+	} else {
+		return ret;
+	}
+
+	ret = arena_alloc(this, newsize);
+	if (nullptr == ret)
+		return nullptr;
+
+	memcpy(ret, mem, newsize > oldsize ? oldsize : newsize);
+
+	return ret;
+}
+
+void
+arena_free(struct Arena *const this, void *const mem)
+{
+	if (nullptr == this || nullptr == mem)
+		return;
+
+	if (0 > this->last || mem != this->memory + this->last) {
+		errno = EADDRNOTAVAIL;
+		return;
+	}
+
+	this->offset = this->last;
+	this->last = -1;
 }
