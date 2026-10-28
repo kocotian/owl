@@ -35,13 +35,14 @@ arenaallocator_create(struct ArenaAllocator *const this)
 	for (typeof_unqual (arena_block_count) i = 0; i < arena_block_count; ++i) {
 		this->blocks[i].memory = this->memory + (arena_block_size * i);
 		this->blocks[i].parent = this;
+		this->blocks[i].next_free = i + 1 == arena_block_count ? -1 : i + 1;
 	}
+
+	this->first_free = 0;
 
 	return 0;
 }
 
-/* Getting arena means we just and return current (position) block
-   and move position right. */
 [[nodiscard]]
 struct Arena *
 arena_get(struct ArenaAllocator *const allocator)
@@ -50,16 +51,19 @@ arena_get(struct ArenaAllocator *const allocator)
 		errno = EINVAL;
 		return nullptr;
 	}
-	if (allocator->position > arena_block_count - 1) {
+	if (0 > allocator->first_free) {
 		errno = ENOMEM;
 		return nullptr;
 	}
-	return allocator->blocks + (allocator->position++);
+	auto ret = allocator->blocks + allocator->first_free;
+	allocator->first_free = ret->next_free;
+	ret->next_free = -2;
+	return ret;
 }
 
 /* Returning arena means we should move position left. */
 int
-arena_return(struct Arena *arena)
+arena_return(struct Arena *const arena)
 {
 	if (nullptr == arena) {
 		errno = EINVAL;
@@ -70,27 +74,20 @@ arena_return(struct Arena *arena)
 	ptrdiff_t this_position = arena - aa->blocks;
 
 	/* We check if given arena fits inside used blocks. */
-	if (this_position < 0 || this_position >= aa->position) {
+	if (0 > this_position || arena_block_count <= this_position) {
 		errno = EFAULT;
 		return -1;
 	}
 
-	/* We check if arena was last occupied arena block.
-	   If not, we should swap that with last occupied arena
-	   block. */
-	if (this_position < (aa->position - 1)) {
-		/* swap */
-		typeof_unqual (*arena) atmp =
-			aa->blocks[aa->position - 1];
-		aa->blocks[aa->position - 1] = *arena;
-		aa->blocks[this_position] = atmp;
-		arena = aa->blocks + (aa->position - 1);
+	if (-2 != arena->next_free) {
+		errno = EFAULT;
+		return -1;
 	}
 
-	if (arena_clear(arena) < 0) /* always false */
-		return 0;
+	arena->next_free = aa->first_free;
+	aa->first_free = this_position;
 
-	--aa->position;
+	arena_clear(arena);
 
 	return 0;
 }

@@ -17,19 +17,20 @@ struct owl_Arena {
 	/* last - previously free space */
 	ptrdiff_t last;
 	struct owl_ArenaAllocator *parent;
+	ptrdiff_t next_free;
 };
 
 struct owl_ArenaAllocator {
 	uint8_t *memory;
 	struct owl_Arena blocks[owl_arena_block_count];
-	ptrdiff_t position;
+	ptrdiff_t first_free;
 };
 
 [[nodiscard]] int owl_arenaallocator_create(struct owl_ArenaAllocator *);
 [[nodiscard]] struct owl_Arena *owl_arena_get(struct owl_ArenaAllocator *);
 int owl_arena_return(struct owl_Arena *);
 int owl_arenaallocator_destroy(struct owl_ArenaAllocator *);
-[[nodiscard]]
+
 static inline int
 owl_arena_clear(struct owl_Arena *this)
 {
