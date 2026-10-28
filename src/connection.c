@@ -4,6 +4,7 @@
 
 #include <owl/connection.h>
 
+#include <owl/arena.h>
 #include <owl/server.h>
 #include <owl/listener.h>
 #include <owl/utils.h>
@@ -18,10 +19,10 @@
 
 [[nodiscard]]
 int
-connection_create(Connection *this, Server *server)
+connection_create(Connection *this, Server *server, struct Arena *arena)
 {
 	/* validate input parameters */
-	if (nullptr == this || nullptr == server) {
+	if (nullptr == this || nullptr == server || nullptr == arena) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -34,6 +35,8 @@ connection_create(Connection *this, Server *server)
 	if (0 > this->fd)
 		/* syscall - errno is set */
 		return -1;
+
+	this->arena = arena;
 
 	/* Great. We can send event that connection is established. */
 	if (nullptr != this->server->ev_connection_established)
@@ -83,9 +86,16 @@ connection_destroy(Connection *this)
 		return -1;
 	}
 
-	/* XXX: is that call below a good idea? */
-	shutdown(this->fd, SHUT_RD);
+	int ret = safe_close(&(this->fd));
+
+	if (0 > arena_return(this->arena)) {
+		/* owl API call - errno is set */
+		return -1;
+	}
+	/* We should invalidate entire arena,
+	   because arena_return could move it. */
+	this->arena = nullptr;
 
 	/* And safely close the connection. */
-	return safe_close(&(this->fd));
+	return ret;
 }

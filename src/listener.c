@@ -12,7 +12,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <stb_ds.h>
+[[nodiscard]] static int listener_register_connection(Listener *this, Connection *connection);
+static inline void listener_unregister_connection(Listener *this, Connection *connection);
 
 [[nodiscard]]
 int
@@ -47,7 +48,7 @@ listener_destroy(Listener *this)
 }
 
 [[nodiscard]]
-int
+static int
 listener_register_connection(Listener *this, Connection *connection)
 {
 	/* validate input parameters */
@@ -57,7 +58,7 @@ listener_register_connection(Listener *this, Connection *connection)
 	}
 
 	struct epoll_event ev = {
-		.events = EPOLLIN | EPOLLET,
+		.events = EPOLLET | EPOLLIN | EPOLLRDHUP | EPOLLOUT,
 		.data.ptr = connection
 	};
 
@@ -70,21 +71,16 @@ listener_register_connection(Listener *this, Connection *connection)
 	return 0;
 }
 
-[[nodiscard]]
-int
+static inline void
 listener_unregister_connection(Listener *this, Connection *connection)
 {
 	/* validate input parameters */
 	if (nullptr == this || nullptr == connection) {
 		errno = EINVAL;
-		return -1;
+		return;
 	}
 
-	if (0 > epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr))
-		/* syscall - errno is set */
-		return -1;
-
-	return 0;
+	epoll_ctl(this->fd, EPOLL_CTL_DEL, connection->fd, nullptr);
 }
 
 int
@@ -121,9 +117,10 @@ listener_start(Listener *this)
 	while (this->server->up) {
 		/* Waiting for events with epoll_wait */
 		int n = epoll_wait(this->fd, events, MAX_EVENTS, -1);
+		bool do_not_accept = false;
 		if (n < 0) {
 			/* Interrupted by signal, just retry */
-			if (errno == EINTR || errno == EAGAIN)
+			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
 				continue;
 
 			/* Any other error, errno is set by epoll_wait */
@@ -133,67 +130,54 @@ listener_start(Listener *this)
 
 		/* Processing all events returned by epoll_wait */
 		for (int i = 0; i < n; ++i) {
-			if (events[i].data.ptr == this->server) {
+			if (events[i].data.ptr == this->server && !do_not_accept) {
 				/* Server got a new connection */
-				Connection *connection = calloc(1, sizeof *connection);
-				/* Dynamic memory - should be free()'d.
-				   TODO: We should think about some connection pool
-				   inside Listener or somewhere. */
-
-				if (nullptr == connection) {
-					fprintf(stderr, "Failed to allocate memory for new connection: %s\n", strerror(errno));
+				struct Arena *carena = arena_get(&(this->server->aa));
+				if (nullptr == carena) {
 					continue;
 				}
 
-				if (0 > connection_create(connection, this->server)) {
-					free(connection);
+				Connection *connection = arena_calloc(carena, sizeof *connection);
+
+				if (nullptr == connection) {
+					arena_return(carena);
+					continue;
+				}
+
+				if (0 > connection_create(connection, this->server, carena)) {
+					do_not_accept = true;
+					arena_return(carena);
 					continue;
 				}
 
 				if (0 > listener_register_connection(this, connection)) {
 					connection_destroy(connection);
-					free(connection);
+					arena_return(carena);
 					continue;
 				}
 			} else {
 				Connection *connection = events[i].data.ptr;
 
-				if (events[i].events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)) {
-					if (events[i].events & EPOLLERR) {
-						if (0 > listener_unregister_connection(this, connection))
-							continue;
-						connection_destroy(connection);
-						continue;
-					}
-					connection_shutdown(connection);
-				}
-
-				if (connection->shutdown) {
-					/* Gracefully shutdown TCP connection. */
-					int rd;
-					char useless[512];
-
-					if (0 != (rd = read(connection->fd, useless, 512))) {
-						if (0 > rd && errno != EAGAIN && errno != EWOULDBLOCK) {
-							perror("read");
-							if (0 > listener_unregister_connection(this, connection))
-								continue;
-							connection_destroy(connection);
-						}
-						continue;
+				if (events[i].events & (EPOLLHUP | EPOLLERR)) {
+					if (events[i].events & EPOLLHUP) {
+						char junk[4096];
+						int rd;
+						do {
+							rd = read(connection->fd, junk, 4096);
+							if (0 > rd) {
+								if (errno == EINTR) rd = 1;
+								else rd = 0;
+							}
+						} while (0 < rd);
 					}
 
-					/* Send event that we closed a connection. */
-					if (nullptr != connection->server->ev_connection_closed)
-						if (0 > connection->server->ev_connection_closed(connection))
-							/* owl API - errno is set */
-							return -1;
-
-					if (0 > listener_unregister_connection(this, connection))
-						continue;
-
+					listener_unregister_connection(this, connection);
 					connection_destroy(connection);
 					continue;
+				}
+
+				if (events[i].events & EPOLLRDHUP) {
+					connection->sockpair_state |= CONN_CLIENT_SHUT_WR;
 				}
 
 				/* In this place, the connection is filled with data
@@ -202,10 +186,37 @@ listener_start(Listener *this)
 
 				if (nullptr != this->server->ev_connection_ready
 				&&  0 > (this->server->ev_connection_ready(connection))) {
-					if (0 > listener_unregister_connection(this, connection))
-						continue;
-
+					listener_unregister_connection(this, connection);
 					connection_destroy(connection);
+					continue;
+				}
+
+				if (connection->shutdown || connection->sockpair_state & CONN_CLIENT_SHUT_WR) {
+					/* Gracefully shutdown TCP connection. */
+					char junk[4096];
+					int rd;
+					do {
+						rd = read(connection->fd, junk, 4096);
+						if (0 > rd) {
+							if (errno == EINTR) rd = 1;
+							else rd = 0;
+						}
+					} while (0 < rd);
+
+					if (connection->shutdown
+							|| 1 /* TODO: we should implement CONN_CLIENT_SHUT_WR better */
+							) {
+						/* Send event that we closed a connection. */
+						if (nullptr == connection->server)
+							continue;
+						if (nullptr != connection->server->ev_connection_closed)
+							if (0 > connection->server->ev_connection_closed(connection))
+								/* owl API - errno is set */
+								return -1;
+
+						listener_unregister_connection(this, connection);
+						connection_destroy(connection);
+					}
 					continue;
 				}
 

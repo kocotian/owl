@@ -15,11 +15,13 @@
 **  listening, connection, etc.
 */
 
+#include <owl/arena.h>
 #include <owl/connection.h>
 
 struct owl_Server {
 	int	fd;
 	bool	up;
+	struct owl_ArenaAllocator aa;
 	int	(*ev_listening)();
 	int	(*ev_connection_established)(struct owl_Connection *);
 	int	(*ev_connection_ready)(struct owl_Connection *);

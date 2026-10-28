@@ -111,6 +111,11 @@ server_create(Server *this, const char *host, int port)
 		/* syscall - errno is set */
 		goto cleanup;
 
+	/* Initialize arena allocator */
+	if (0 > arenaallocator_create(&(this->aa)))
+		/* owl API call - errno is set */
+		goto cleanup;
+
 	this->up = true;
 
 	return 0;
@@ -128,6 +133,9 @@ server_destroy(Server *this)
 		errno = EINVAL;
 		return -1;
 	}
+
+	if (0 > arenaallocator_destroy(&(this->aa)))
+		return -1;
 
 	if (0 > safe_close(&(this->fd)))
 		return -1;

@@ -2,9 +2,9 @@
 
 > [!WARNING]
 > This library is not in production state yet.
-> There are eg. many known memory leaks that
-> will be naturally resolved with implementation
-> of arena allocator (in v0.1).
+> There are eg. known memory leaks that
+> come from stb_ds that will be replaced
+> with custom linked lists.
 
 **Open Web Libraries** (`owl`) is a project to bring set of simple,
 fast and secure web libraries for C. **Single threaded**!
@@ -46,10 +46,10 @@ Transfer/sec: 4.09MB
 ```
 
 ## Roadmap (v0.1)
-- [ ] Replace `read()`/`write()` with `recv()`/`send()` with flags
+- [X] Replace `read()`/`write()` with `recv()`/`send()` with flags
 - [ ] Implement own "String View"
 - [ ] Make parser a real "zero-copy" one
-- [ ] Implement arena allocator
+- [X] Implement arena allocator
 
 ## In the future
 - Implement Client

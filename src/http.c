@@ -2,6 +2,7 @@
 
 #include <owl/http.h>
 
+#include <owl/arena.h>
 #include <owl/listener.h>
 
 #include <sys/socket.h>
@@ -13,6 +14,8 @@
 #include <stdarg.h>
 #include <unistd.h>
 
+#define STBDS_NO_SHORT_NAMES
+#define STB_DS_IMPLEMENTATION
 #include <stb_ds.h>
 
 /* 8 MB max request size for now, to avoid unbounded memory usage. */
@@ -86,7 +89,7 @@ httpheader_req_get(HTTPTransaction *t, const char *key, HTTPHeader **h)
 		return -1;
 	}
 
-	auto header = shgetp_null(t->request.headers, key);
+	auto header = stbds_shgetp_null(t->request.headers, key);
 	if (nullptr == header) {
 		errno = ENOENT;
 		return -1;
@@ -106,12 +109,10 @@ httpheader_res_set(HTTPTransaction *t, const char *key, const char *val)
 		return -1;
 	}
 
-	/* TODO: harden, change malloc to arena when implemented */
-
 	HTTPHeader h = {nullptr, nullptr};
 
 	size_t kcap = strlen(key) + 1;
-	h.key = malloc(kcap);
+	h.key = arena_alloc(t->connection->arena, kcap);
 	if (nullptr == h.key)
 		return -1;
 
@@ -121,19 +122,19 @@ httpheader_res_set(HTTPTransaction *t, const char *key, const char *val)
 	/* TODO: surely null-terminated? */
 
 	size_t vcap = strlen(val) + 1;
-	char *value = malloc(vcap);
+	char *value = arena_alloc(t->connection->arena, vcap);
 	if ((vcap - 1) != strlcpy(value, val, vcap))
 		goto val_cleanup;
 	
-	arrput(h.val, value);
-	shputs(t->response.headers, h);
+	stbds_arrput(h.val, value);
+	stbds_shputs(t->response.headers, h);
 
 	return kcap + vcap;
 
 val_cleanup:
-	free(value);
+	arena_free(t->connection->arena, value);
 key_cleanup:
-	free(h.key);
+	arena_free(t->connection->arena, h.key);
 
 	return -1;
 }
@@ -152,6 +153,7 @@ httpheader_res_setf(HTTPTransaction *t, const char *key, const char *val_fmt, ..
 	char *val;
 
 	va_start(args, val_fmt);
+	/* TODO: implement some kind of arena_sprintf() */
 	if (0 > (ret = vasprintf(&val, val_fmt, args)))
 		val = nullptr;
 	va_end(args);
@@ -281,7 +283,7 @@ httprequest_parse_request_line(int fd, HTTPConnectionState *st)
 	}
 	uri_len = uri_end - cursor;
 
-	req->uri = malloc(uri_len + 1);
+	req->uri = arena_alloc(t->connection->arena, uri_len + 1);
 	/* TODO: strlcpy */
 	strncpy(req->uri, cursor, uri_len);
 	req->uri[uri_len] = '\0';
@@ -344,7 +346,7 @@ httprequest_parse_header_line(HTTPConnectionState *st, char *line, size_t line_l
 		return_status (HTTP_STATUS_BAD_REQUEST);
 
 	/* Trying to get header if it already exists */
-	header = shgetp_null(req->headers, h.key);
+	header = stbds_shgetp_null(req->headers, h.key);
 	/* If header is still nullptr, it means that header with that key
 	   do not exists. */
 	if (nullptr == header)
@@ -363,11 +365,11 @@ httprequest_parse_header_line(HTTPConnectionState *st, char *line, size_t line_l
 
 	*cursor = '\0';
 
-	arrput(header->val, value);
+	stbds_arrput(header->val, value);
 	/* If header points to h, it means that we didn't had header
 	   with that key yet. */
 	if (header == &h)
-		shputs(req->headers, h);
+		stbds_shputs(req->headers, h);
 
 	cursor += 2;
 	req_len_avail -= 2;
@@ -391,7 +393,7 @@ httprequest_read_body([[maybe_unused]] int fd, HTTPConnectionState *st, char *da
 	HTTPRequest *req = &(t->request);
 
 	HTTPHeader *content_length =
-		shgetp_null(req->headers, "content-length");
+		stbds_shgetp_null(req->headers, "content-length");
 
 	if (nullptr == content_length) {
 		return 1;
@@ -399,7 +401,7 @@ httprequest_read_body([[maybe_unused]] int fd, HTTPConnectionState *st, char *da
 
 	/* TODO: Check if content_length have exacly one item.
 	   Should move it to parser. */
-	if (1 != arrlen(content_length->val))
+	if (1 != stbds_arrlen(content_length->val))
 		return -1;
 
 	size_t clen = atol(content_length->val[0]);
@@ -550,9 +552,26 @@ httprequest_read(int fd, HTTPConnectionState *st)
 
 	/* We will read to a buffer at most [capacity - length + <null terminator>] bytes
 	   until readable. */
-	while ((r = recv(fd, st->buffer + st->buffer_length,
+	while (1) {
+		/* We'll check if we have at least 512 free bytes
+		   in the buffer (including space for the null terminator).
+		   If not, we need to realloc to read more. */
+		if ((st->buffer_length + 513) >= st->buffer_capacity) {
+			typeof_unqual (st->buffer) new_buffer =
+				arena_realloc(t->connection->arena, st->buffer, st->buffer_capacity, st->buffer_capacity * 2);
+			if (nullptr == new_buffer)
+				return -1;
+			st->buffer = new_buffer;
+			if (!st->buffer) /* realloc failed */
+				return_status (HTTP_STATUS_INTERNAL_SERVER_ERROR);
+			st->buffer_capacity *= 2;
+		}
+
+		r = recv(fd, st->buffer + st->buffer_length,
 			st->buffer_capacity - (st->buffer_length + 1),
-			0)) > 0) {
+			0);
+		if (0 >= r)
+			break;
 		/* Length of data read grows by r. */
 		st->buffer_length += r;
 
@@ -561,20 +580,14 @@ httprequest_read(int fd, HTTPConnectionState *st)
 		   we should stop reading and return an error: */
 		if ((st->buffer_length + 1) >= MAX_REQUEST_SIZE)
 			return_status (HTTP_STATUS_CONTENT_TOO_LARGE);
-
-		/* If we don't have any more space in the buffer (including space for the null terminator),
-		   we need to realloc to read more. */
-		if ((st->buffer_length + 1) >= st->buffer_capacity) {
-			st->buffer = realloc(st->buffer, st->buffer_capacity *= 2);
-			if (!st->buffer) /* realloc failed */
-				return_status (HTTP_STATUS_INTERNAL_SERVER_ERROR);
-		}
 	}
 
-	if (0 > r && (errno != EAGAIN && errno != EWOULDBLOCK)) {
-		/* An actual error occurred */
-		fprintf(stderr, "[ERROR] read(fd: %d): %s\n", fd, strerror(errno));
-		return_status (HTTP_STATUS_INTERNAL_SERVER_ERROR);
+	if (0 > r) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK) {
+			/* An actual error occurred */
+			fprintf(stderr, "[ERROR] read(fd: %d): %s\n", fd, strerror(errno));
+			return_status (HTTP_STATUS_INTERNAL_SERVER_ERROR);
+		}
 	}
 
 	/* If r is 0, it means the connection was closed by the client. */
@@ -632,12 +645,13 @@ xwrite(HTTPTransaction *t, const char *const restrict data, size_t outlen)
 
 	if (cldiff < 64 || (ssize_t)outlen > cldiff) {
 		/* 64 = sqrt(4096) */
-		int new_cap = res->raw_response_cap;
+		int old_cap = res->raw_response_cap;
+		int new_cap = old_cap;
 		do {
 			new_cap <<= 1;
 		} while (new_cap - res->raw_response_len < outlen);
 		typeof_unqual (res->raw_response) new_response =
-			realloc(res->raw_response, new_cap);
+			arena_realloc(t->connection->arena, res->raw_response, old_cap, new_cap);
 		if (nullptr == new_response)
 			return -1;
 		res->raw_response = new_response;
@@ -670,12 +684,13 @@ xprintf(HTTPTransaction *t, const char *fmt, ...)
 
 	if (cldiff < 64 || ((ssize_t)outlen + 1) > cldiff) {
 		/* 64 = sqrt(4096) */
-		int new_cap = res->raw_response_cap;
+		int old_cap = res->raw_response_cap;
+		int new_cap = old_cap;
 		do {
 			new_cap <<= 1;
 		} while (new_cap - res->raw_response_len < (outlen + 1));
 		typeof_unqual (res->raw_response) new_response =
-			realloc(res->raw_response, new_cap);
+			arena_realloc(t->connection->arena, res->raw_response, old_cap, new_cap);
 		if (nullptr == new_response)
 			return -1;
 		res->raw_response = new_response;
@@ -707,7 +722,17 @@ httpresponse_prepare(HTTPTransaction *t)
 
 	HTTPResponse *res = &(t->response);
 
-	res->raw_response = malloc(res->raw_response_cap = 4096);
+	res->raw_response = arena_calloc(t->connection->arena, res->raw_response_cap = 4096);
+	if (nullptr == res->raw_response) {
+		res->raw_response =
+			"HTTP/1.1 503 Service Unavailable\r\n"
+			"Content-Type: text/html;charset=utf-8\r\n"
+			"Content-Length: 33\r\n"
+			"\r\n"
+			"<h1>503 Service Unavailable</h1>\n";
+		res->raw_response_len = sizeof (res->raw_response) / sizeof (*res->raw_response);
+		return res->raw_response_len;
+	}
 
 	xprintf(t, "HTTP/1.1 %d %s\r\n", t->status_code, http_status_str(t->status_code));
 
@@ -723,8 +748,8 @@ httpresponse_prepare(HTTPTransaction *t)
 	   to decide whether connection'll be closed or not. */
 	xwrite(t, "Connection: close\r\n", 0);
 
-	for (int i = 0; i < shlen(res->headers); i++) {
-		for (int j = 0; j < arrlen(res->headers[i].val); ++j)
+	for (int i = 0; i < stbds_shlen(res->headers); i++) {
+		for (int j = 0; j < stbds_arrlen(res->headers[i].val); ++j)
 			xprintf(t, "%s: %s\r\n", res->headers[i].key, res->headers[i].val[j]);
 	}
 
@@ -796,20 +821,34 @@ httpserver_default_connection_handler(Connection *connection)
 	HTTPTransaction *t = nullptr;
 	int status;
 
+	/* We should first check if the connection have available state. */
 	if (nullptr == connection->state) {
-		st = calloc(1, sizeof *st);
-		httpconnectionstate_create(st, (HTTPServer *)connection->server);
-		st->connection = connection;
+		/* If not - we should create one. */
+		st = arena_calloc(connection->arena, sizeof *st);
+		if (nullptr == st)
+			return -1;
+		if (0 > httpconnectionstate_create(st, (HTTPServer *)connection->server, connection)) {
+			return -1;
+		}
 		connection->state = st;
+		st->current_state = HTTPCS_REQUEST;
 	} else
+		/* If yes, we'll bring it back */
 		st = connection->state;
 
 	t = &(st->current_transaction);
+
+	if (HTTPCS_REQUEST == st->current_state) {
+	}
 
 	/* TODO: destroy transaction */
 
 	/* Read the request and parse it */
 	if (0 > (status = httprequest_read(connection->fd, st))) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			/* TODO: check if return 0 is good here */
+			return 0;
+		}
 		/* Something went wrong when reading. */
 		if (0 == t->status_code)
 			/* Fatal error while parsing request, we should close
@@ -904,7 +943,7 @@ httpserver_create(HTTPServer *this, const char *host, int port)
 }
 
 int
-httptransaction_create(HTTPTransaction *this, HTTPServer *server)
+httptransaction_create(HTTPTransaction *this, HTTPServer *server, Connection *connection)
 {
 	/* validate input parameters */
 	if (nullptr == this || nullptr == server) {
@@ -914,12 +953,13 @@ httptransaction_create(HTTPTransaction *this, HTTPServer *server)
 
 	/* Assign original server */
 	this->server = server;
+	this->connection = connection;
 
 	return 0;
 }
 
 int
-httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server)
+httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server, Connection *connection)
 {
 	/* validate input parameters */
 	if (nullptr == this) {
@@ -927,17 +967,18 @@ httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTP
 		return -1;
 	}
 
-	if (0 > httptransaction_create(&(this->current_transaction), server))
+	if (0 > httptransaction_create(&(this->current_transaction), server, connection))
 		return -1;
 
 	/* Then get data for request to be read.
 	   TODO:
 	   - Should be arena-allocated when arena allocator will be written.
 	   - Probably will be rewritten at all. */
-	if (nullptr == (this->buffer = malloc(this->buffer_capacity = 1024)))
+	if (nullptr == (this->buffer = arena_alloc(connection->arena, this->buffer_capacity = 1024)))
 		return -1;
 
 	this->buffer_length = 0;
+	this->connection = connection;
 
 	return 0;
 }

@@ -77,6 +77,7 @@ struct owl_HTTPResponse {
 
 struct owl_HTTPTransaction {
 	struct owl_HTTPServer *server;
+	struct owl_Connection *connection;
 
 	struct owl_HTTPRequest request;
 	struct owl_HTTPResponse response;
@@ -93,6 +94,16 @@ struct owl_HTTPHeader {
 struct owl_HTTPConnectionState {
 	struct owl_Connection *connection;
 	struct owl_HTTPTransaction current_transaction;
+
+	enum {
+		HTTPCS_FRESH = 0,
+		HTTPCS_REQUEST,
+		HTTPCS_LOGIC,
+		HTTPCS_PREPARING_RESPONSE,
+		HTTPCS_SENDING_RESPONSE,
+		HTTPCS_FINE,
+	} current_state;
+
 	int done;
 
 	char *buffer;
@@ -125,8 +136,8 @@ int owl_httpresponse_prepare(struct owl_HTTPTransaction *t);
 int owl_httpresponse_write(int fd, struct owl_HTTPTransaction *t);
 int owl_httpserver_create_unix(struct owl_HTTPServer *this, const char *path);
 int owl_httpserver_create(struct owl_HTTPServer *this, const char *host, int port);
-int owl_httptransaction_create(struct owl_HTTPTransaction *this, struct owl_HTTPServer *server);
-int owl_httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server);
+int owl_httptransaction_create(struct owl_HTTPTransaction *this, struct owl_HTTPServer *server, struct owl_Connection *connection);
+int owl_httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTPServer *server, struct owl_Connection *connection);
 
 int owl_httpserver_on_transaction(struct owl_HTTPServer *, int (*handler)(struct owl_HTTPTransaction *));
 
