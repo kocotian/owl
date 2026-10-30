@@ -688,7 +688,8 @@ xprintf(HTTPTransaction *t, const char *fmt, ...)
 		int new_cap = old_cap;
 		do {
 			new_cap <<= 1;
-		} while (new_cap - res->raw_response_len < (outlen + 1));
+			/* TODO: probably check if 1st bit is set (un/signed) */
+		} while ((ssize_t)(new_cap - res->raw_response_len) < (outlen + 1));
 		typeof_unqual (res->raw_response) new_response =
 			arena_realloc(t->connection->arena, res->raw_response, old_cap, new_cap);
 		if (nullptr == new_response)
@@ -697,7 +698,8 @@ xprintf(HTTPTransaction *t, const char *fmt, ...)
 		res->raw_response_cap = new_cap;
 	}
 
-	if (res->raw_response_cap - res->raw_response_len < outlen)
+	/* TODO: probably check if 1st bit is set (un/signed) */
+	if ((ssize_t)(res->raw_response_cap - res->raw_response_len) < outlen)
 		return -1;
 
 	va_start(ap, fmt);
@@ -724,13 +726,13 @@ httpresponse_prepare(HTTPTransaction *t)
 
 	res->raw_response = arena_calloc(t->connection->arena, res->raw_response_cap = 4096);
 	if (nullptr == res->raw_response) {
-		res->raw_response =
+		res->raw_response = 
 			"HTTP/1.1 503 Service Unavailable\r\n"
 			"Content-Type: text/html;charset=utf-8\r\n"
 			"Content-Length: 33\r\n"
 			"\r\n"
 			"<h1>503 Service Unavailable</h1>\n";
-		res->raw_response_len = sizeof (res->raw_response) / sizeof (*res->raw_response);
+		res->raw_response_len = __builtin_strlen(res->raw_response);
 		return res->raw_response_len;
 	}
 
@@ -800,7 +802,8 @@ httpresponse_write(int fd, HTTPTransaction *t)
 			return -1;
 		}
 	}
-	if (resp_tw != res->raw_response_len) {
+	/* TODO: probably check if 1st bit is set (un/signed) */
+	if (resp_tw != (ssize_t)res->raw_response_len) {
 		errno = EIO;
 		return -1;
 	}
@@ -971,9 +974,7 @@ httpconnectionstate_create(struct owl_HTTPConnectionState *this, struct owl_HTTP
 		return -1;
 
 	/* Then get data for request to be read.
-	   TODO:
-	   - Should be arena-allocated when arena allocator will be written.
-	   - Probably will be rewritten at all. */
+	   TODO: Probably rewrite. */
 	if (nullptr == (this->buffer = arena_alloc(connection->arena, this->buffer_capacity = 1024)))
 		return -1;
 

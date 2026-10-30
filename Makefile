@@ -10,7 +10,7 @@ CFLAGS = -std=gnu23 -O3 -fhardened -march=native \
 #	 -Wconversion -Wsign-conversion \
 #	 -Wundef
 
-CFLAGS += -fsanitize=address,leak,undefined
+# CFLAGS += -fsanitize=address,leak,undefined
 
 CPPFLAGS = -Iinclude -I.
 
@@ -33,3 +33,6 @@ ${TARGET}: ${OBJ}
 
 clean:
 	rm -f ${TARGET} ${OBJ}
+
+example: example.c libowl.a
+	${CC} ${CPPFLAGS} ${CFLAGS} -o $@ $< libowl.a

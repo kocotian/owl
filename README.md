@@ -2,9 +2,9 @@
 
 > [!WARNING]
 > This library is not in production state yet.
-> There are eg. known memory leaks that
-> come from stb_ds that will be replaced
-> with custom linked lists.
+> Currently the library can leak memory when
+> using specific functions, that use stb_ds that
+> will be replaced with custom linked lists.
 
 **Open Web Libraries** (`owl`) is a project to bring set of simple,
 fast and secure web libraries for C. **Single threaded**!
@@ -43,6 +43,12 @@ Running 5s test @ http://localhost:8080
   Socket errors: connect 0, read 0, write 0, timeout 43
 Requests/sec: 32739.87
 Transfer/sec: 4.09MB
+```
+## Quickstart
+You can build and run a simple example server (on localhost:8080):
+```
+$ make example
+$ ./example
 ```
 
 ## Roadmap (v0.1)
